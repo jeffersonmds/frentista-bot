@@ -20,6 +20,7 @@ bot    📊 2026
        ⛽ Combustível: R$ 3.900,00
        🔧 Manutenção: R$ 380,00
        ...
+       💰 R$ 0,44/km só combustível · R$ 0,59/km com tudo
        Comum: 14,10 km/L · Aditivada: 13,90 km/L
 ```
 
@@ -29,9 +30,13 @@ bot    📊 2026
 
 - **Lê o print do Shell Box** com o Gemini: data, litros, valor, cashback e se foi gasolina comum ou aditivada (V-Power).
 - **Grava o custo real**: o valor que saiu do bolso menos o cashback. Créditos Shell Box contam como dinheiro, porque você já pagou por eles.
-- **Calcula o consumo** de cada abastecimento: (km atual − km anterior) ÷ litros. E reclama se o número sair absurdo.
+- **Calcula o consumo** de cada abastecimento: (km atual − km anterior) ÷ litros. E reclama se o número sair absurdo, ou se o R$/L fugir mais de 15% da sua média (sinal de leitura errada).
+- **Lê o km do painel**: mandou o print sem legenda? Responda com uma foto do hodômetro.
+- **Não anota duas vezes**: o mesmo abastecimento (data, litros e valor) mandado de novo é ignorado.
 - **Anota o resto**: manutenção, impostos e seguro, por comando de texto.
-- **Resume o ano** na própria planilha e no `/resumo`, separando comum de aditivada, pra você descobrir se a aditivada compensa mesmo.
+- **Resume o ano** na própria planilha e no `/resumo`, com custo por km e comum separada de aditivada, pra você descobrir se a aditivada compensa mesmo.
+- **Manda o resumo do mês** sozinho, todo dia 1.
+- **Gráficos** de R$/L, km/L e gasto por mês numa aba da planilha.
 - **Uma planilha pra sempre**: todos os anos na mesma aba, com o resumo em colunas por ano.
 
 ## Como funciona
@@ -39,7 +44,7 @@ bot    📊 2026
 ```
 iPhone ──print + km──▶ Telegram ◀──getUpdates a cada 1 min── Google Apps Script
                                                               ├─▶ Gemini Flash (lê o print)
-                                                              └─▶ Planilha Google (Lançamentos + Resumo)
+                                                              └─▶ Planilha Google (Lançamentos, Resumo, Gráficos)
 ```
 
 Não tem servidor. O código roda no Apps Script, vinculado à planilha, de graça e sempre no ar. Um gatilho de 1 minuto busca as mensagens novas, então a resposta chega em até um minuto. O Gemini Flash tem cota gratuita mais do que suficiente para alguns abastecimentos por mês.
@@ -49,13 +54,13 @@ Não tem servidor. O código roda no Apps Script, vinculado à planilha, de gra�
 | Mensagem | O que faz |
 |---|---|
 | 📷 print + legenda `48250` | Abastecimento lido do print |
-| 📷 print sem legenda | O bot pergunta o km, e você responde só o número |
+| 📷 print sem legenda | O bot pergunta o km: responda o número ou uma foto do painel |
 | `72,40 11,20 48250 a` | Abastecimento digitado: valor, litros, km, tipo (`c` comum, `a` aditivada) |
 | `/manut 380 troca de óleo` | Manutenção |
 | `/imposto 1200 IPVA` | Imposto (IPVA, licenciamento, multa...) |
 | `/seguro 3000` | Seguro |
 | `... 26/12` ou `... 26/12/2025` no fim | Data diferente de hoje (nos três comandos acima) |
-| `/resumo` | Gastos do ano, km rodado, consumo médio, último abastecimento |
+| `/resumo` | Gastos do ano, km rodado, consumo médio, custo por km, último abastecimento |
 | `/desfazer` | Apaga o último lançamento |
 | `/start` | Ajuda |
 
@@ -70,7 +75,9 @@ Números aceitam vírgula ou ponto. O km aceita `48250`, `48.250` ou `48250 km`.
 | 04/11/2026 | Combustível | 70,00 | 10,50 | 48250 | A | 6,67 | 12,57 | | Posto Exemplo |
 | 05/11/2026 | Manutenção | 380,00 | | | | | | | troca de óleo |
 
-**Resumo**: só fórmulas, uma coluna por ano (de 2026 até o ano que vem, mínimo 2030; rodar `configurarPlanilha` de novo estende): gasto total e por categoria, km rodado, litros, km/L médio, R$/L médio, comum vs. aditivada e cashback acumulado.
+**Resumo**: só fórmulas, uma coluna por ano (de 2026 até o ano que vem, mínimo 2030; rodar `configurarPlanilha` de novo estende): gasto total e por categoria, km rodado, litros, km/L médio, R$/L médio, comum vs. aditivada, cashback acumulado e R$/km.
+
+**Gráficos**: R$/L e km/L ao longo do tempo (comum x aditivada) e gasto por mês. As tabelas à esquerda alimentam os gráficos; não esconda essas colunas, porque gráfico ignora coluna oculta.
 
 O km/L médio é ponderado (km total ÷ litros total), não a média simples das linhas, que distorce quando aparece um abastecimento esquisito.
 
@@ -120,7 +127,7 @@ No editor, escolha a função `configurarPlanilha` e clique em **Executar**. Na 
 
 ### 6. Ligue o gatilho
 
-No editor, execute `configurarGatilho`. O Google pede mais uma autorização (para criar gatilhos). Isso cria um gatilho que roda `verificar` a cada minuto.
+No editor, execute `configurarGatilho`. O Google pede mais uma autorização (para criar gatilhos). Isso cria um gatilho que roda `verificar` a cada minuto e outro que manda o resumo do mês todo dia 1, por volta das 9h.
 
 > Por que não webhook? O web app do Apps Script responde todo POST com um redirect 302. O Telegram trata isso como erro e reenvia a mesma mensagem com backoff, travando a fila. Polling de 1 minuto é mais simples e não precisa de deploy.
 

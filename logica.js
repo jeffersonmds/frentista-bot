@@ -149,9 +149,116 @@ function formatarConfirmacao(linha, kmRodado, aviso) {
   return partes.join(' · ') + (aviso ? '\n' + aviso : '');
 }
 
+/** Linha sem o prefixo "Anotado, chefe!" (pra /desfazer, duplicado e último abastecimento). */
+function descreverLinha(linha) {
+  return formatarConfirmacao(linha, null, null).replace(/^\S+ Anotado, chefe! /, '');
+}
+
+// ───────── Funções sobre as linhas da aba Lançamentos (ordem de COLUNAS) ─────────
+
+const combustiveis = linhas => linhas.filter(l => l[1] === 'Combustível');
+const ehNumero = v => typeof v === 'number' && isFinite(v);
+const mesmoDia = (a, b) => a instanceof Date && b instanceof Date &&
+  a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+
+/** Km do último abastecimento; null se não houver ou se ele não tiver km. */
+function kmAnteriorDe(linhas) {
+  const ultimo = combustiveis(linhas).pop();
+  return ultimo && ehNumero(ultimo[4]) ? ultimo[4] : null;
+}
+
+/** Abastecimento já lançado com mesma data, litros e valor líquido; senão null. */
+function acharDuplicado(linhas, a) {
+  const valor = arred2(a.valorPago - (a.cashback || 0));
+  return combustiveis(linhas).find(l => mesmoDia(l[0], a.data) &&
+    ehNumero(l[3]) && Math.abs(l[3] - a.litros) < 0.005 &&
+    ehNumero(l[2]) && Math.abs(l[2] - valor) < 0.005) || null;
+}
+
+const PRECO_DESVIO = 0.15;
+
+/** Avisa se o R$/L foge mais de 15% da média dos últimos 10 do mesmo tipo (mínimo 3). */
+function avisoPreco(linhas, combustivel, precoLitro) {
+  const precos = combustiveis(linhas).filter(l => l[5] === combustivel && ehNumero(l[6])).map(l => l[6]).slice(-10);
+  if (precos.length < 3 || !ehNumero(precoLitro)) return null;
+  const media = precos.reduce((s, p) => s + p, 0) / precos.length;
+  return Math.abs(precoLitro - media) / media > PRECO_DESVIO
+    ? `⚠️ R$ ${fmtNum(precoLitro)}/L tá bem fora da sua média (R$ ${fmtNum(media)}/L). Confere o print.`
+    : null;
+}
+
+/**
+ * Números de um período [inicio, fim). Km rodado = Σ Km/L × Litros (só linhas com Km/L),
+ * igual às fórmulas da aba Resumo. Divisões sem base viram null.
+ */
+function resumoPeriodo(linhas, inicio, fim) {
+  const no = linhas.filter(l => l[0] instanceof Date && l[0] >= inicio && l[0] < fim);
+  const soma = (ls, f) => ls.reduce((s, l) => s + f(l), 0);
+  const div = (a, b) => (b > 0 ? a / b : null);
+  const valor = l => (ehNumero(l[2]) ? l[2] : 0);
+  const litros = l => (ehNumero(l[3]) ? l[3] : 0);
+  const comb = combustiveis(no);
+  const comKmL = comb.filter(l => ehNumero(l[7]));
+  const kmDe = ls => soma(ls, l => l[7] * litros(l));
+  const kmLDe = ls => div(kmDe(ls), soma(ls, litros));
+  const porCategoria = {};
+  no.forEach(l => { porCategoria[l[1]] = (porCategoria[l[1]] || 0) + valor(l); });
+  const total = soma(no, valor);
+  const km = Math.round(kmDe(comKmL));
+  const comLitros = comb.filter(l => litros(l) > 0);
+  return {
+    total,
+    porCategoria,
+    litros: soma(comb, litros),
+    km,
+    kmL: kmLDe(comKmL),
+    rsL: div(soma(comLitros, valor), soma(comLitros, litros)),
+    kmLComum: kmLDe(comKmL.filter(l => l[5] === 'C')),
+    kmLAditivada: kmLDe(comKmL.filter(l => l[5] === 'A')),
+    rsKmCombustivel: div(soma(comKmL, valor), kmDe(comKmL)),
+    rsKmTotal: div(total, km),
+    cashback: soma(no, l => (ehNumero(l[8]) ? l[8] : 0)),
+  };
+}
+
+function formatarResumo(titulo, r) {
+  const rs = n => (ehNumero(n) ? 'R$ ' + fmtNum(n) : '—');
+  const cat = c => rs(r.porCategoria[c] || 0);
+  return [
+    `📊 ${titulo}`,
+    `Total: ${rs(r.total)}`,
+    `⛽ Combustível: ${cat('Combustível')}`,
+    `🔧 Manutenção: ${cat('Manutenção')}`,
+    `🏛️ Impostos: ${cat('Imposto')}`,
+    `🛡️ Seguro: ${cat('Seguro')}`,
+    `🛣️ ${r.km} km · ${fmtNum(r.kmL)} km/L · ${rs(r.rsL)}/L`,
+    `💰 ${rs(r.rsKmCombustivel)}/km só combustível · ${rs(r.rsKmTotal)}/km com tudo`,
+    `Comum: ${fmtNum(r.kmLComum)} km/L · Aditivada: ${fmtNum(r.kmLAditivada)} km/L`,
+    `💸 Cashback: ${rs(r.cashback)}`,
+  ].join('\n');
+}
+
+const MESES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho',
+  'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+
+/** {inicio, fim, titulo} do mês anterior a `agora`. */
+function mesAnterior(agora) {
+  const inicio = new Date(agora.getFullYear(), agora.getMonth() - 1, 1);
+  return { inicio, fim: new Date(agora.getFullYear(), agora.getMonth(), 1), titulo: `${MESES[inicio.getMonth()]} de ${inicio.getFullYear()}` };
+}
+
+/** Km do hodômetro lido pelo Gemini numa foto do painel; null se não deu. */
+function kmDoPainel(obj) {
+  if (!obj || obj.imagem !== 'painel') return null;
+  const km = ehNumero(obj.km) ? Math.round(obj.km) : parseKm(obj.km);
+  return km > 0 ? km : null;
+}
+
 if (typeof module !== 'undefined') {
   module.exports = {
     COLUNAS, parseNumero, parseKm, parseData, parseMensagem, textoSeguro,
     normalizarGemini, montarAbastecimento, montarDespesa, formatarConfirmacao,
+    descreverLinha, kmAnteriorDe, acharDuplicado, avisoPreco, resumoPeriodo, formatarResumo,
+    mesAnterior, kmDoPainel,
   };
 }

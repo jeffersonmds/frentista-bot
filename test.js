@@ -113,4 +113,78 @@ assert.strictEqual(L.normalizarGemini({ litros: 10, valorPago: 70, cashback: -1 
 assert.strictEqual(L.normalizarGemini({ litros: 10, valorPago: 70, posto: '=IMPORTXML("x")' }, hoje).posto, "'=IMPORTXML(\"x\")");
 assert.strictEqual(L.parseMensagem('/manut 50 =1+1', hoje).descricao, "'=1+1");
 
+// melhorias: linhas fictícias da aba Lançamentos
+const dia = (m, d) => new Date(2026, m - 1, d);
+const ab = (data, valor, litros, km, tipo, kmL) => [data, 'Combustível', valor, litros, km, tipo, L.parseNumero((valor / litros).toFixed(2)), kmL, '', ''];
+const linhas = [
+  ab(dia(9, 1), 60, 10, 1000, 'C', ''),
+  ab(dia(9, 15), 62, 10, 1120, 'C', 12),
+  [dia(9, 20), 'Manutenção', 300, '', '', '', '', '', '', 'óleo'],
+  ab(dia(10, 1), 61, 10, 1260, 'A', 14),
+  ab(dia(10, 10), 60, 10, 1400, 'C', 14),
+  [dia(10, 12), 'Imposto', 100, '', '', '', '', '', 5, 'licenciamento'],
+];
+
+// kmAnteriorDe: último abastecimento, ignorando outras categorias
+assert.strictEqual(L.kmAnteriorDe(linhas), 1400);
+assert.strictEqual(L.kmAnteriorDe([]), null);
+assert.strictEqual(L.kmAnteriorDe([ab(dia(9, 1), 60, 10, '', 'C', '')]), null);
+
+// acharDuplicado: mesma data, litros e valor líquido
+const dup = { data: dia(10, 10), valorPago: 62, cashback: 2, litros: 10 };
+assert.ok(L.acharDuplicado(linhas, dup));
+assert.strictEqual(L.acharDuplicado(linhas, { ...dup, litros: 11 }), null);
+assert.strictEqual(L.acharDuplicado(linhas, { ...dup, data: dia(10, 11) }), null);
+assert.strictEqual(L.acharDuplicado(linhas, { ...dup, cashback: 0 }), null);
+assert.ok(L.descreverLinha(linhas[4]).startsWith('10/10'));
+
+// avisoPreco: média dos últimos do mesmo tipo, mínimo 3
+assert.strictEqual(L.avisoPreco(linhas, 'C', 6.1), null);
+assert.ok(L.avisoPreco(linhas, 'C', 7.5));
+assert.ok(L.avisoPreco(linhas, 'C', 5));
+assert.strictEqual(L.avisoPreco(linhas, 'A', 9), null); // só 1 aditivada no histórico
+
+// resumoPeriodo: outubro
+let rp = L.resumoPeriodo(linhas, dia(10, 1), dia(11, 1));
+assert.strictEqual(rp.total, 221);
+assert.strictEqual(rp.porCategoria['Combustível'], 121);
+assert.strictEqual(rp.porCategoria['Imposto'], 100);
+assert.strictEqual(rp.litros, 20);
+assert.strictEqual(rp.km, 280);
+assert.strictEqual(rp.kmL, 14);
+assert.strictEqual(rp.rsL, 6.05);
+assert.strictEqual(rp.kmLComum, 14);
+assert.strictEqual(rp.kmLAditivada, 14);
+assert.strictEqual(rp.rsKmCombustivel, 121 / 280);
+assert.strictEqual(rp.rsKmTotal, 221 / 280);
+assert.strictEqual(rp.cashback, 5);
+// setembro: o primeiro abastecimento não tem Km/L e fica fora do km e do R$/km
+rp = L.resumoPeriodo(linhas, dia(9, 1), dia(10, 1));
+assert.strictEqual(rp.km, 120);
+assert.strictEqual(rp.litros, 20);
+assert.strictEqual(rp.rsKmCombustivel, 62 / 120);
+assert.strictEqual(rp.kmLAditivada, null);
+// período vazio não quebra
+rp = L.resumoPeriodo(linhas, dia(1, 1), dia(2, 1));
+assert.strictEqual(rp.total, 0);
+assert.strictEqual(rp.kmL, null);
+txt = L.formatarResumo('janeiro de 2026', rp);
+assert.ok(txt.includes('janeiro de 2026') && txt.includes('—'), txt);
+txt = L.formatarResumo('2026', L.resumoPeriodo(linhas, dia(1, 1), new Date(2027, 0, 1)));
+assert.ok(txt.includes('/km só combustível') && txt.includes('400 km'), txt);
+
+// mesAnterior: inclusive virada de ano
+let ma = L.mesAnterior(new Date(2026, 0, 1, 9));
+assert.strictEqual(ymd(ma.inicio), '2025-12-1');
+assert.strictEqual(ymd(ma.fim), '2026-1-1');
+assert.strictEqual(ma.titulo, 'dezembro de 2025');
+assert.strictEqual(L.mesAnterior(hoje).titulo, 'outubro de 2026');
+
+// kmDoPainel
+assert.strictEqual(L.kmDoPainel({ imagem: 'painel', km: 48250 }), 48250);
+assert.strictEqual(L.kmDoPainel({ imagem: 'painel', km: '48.250' }), 48250);
+assert.strictEqual(L.kmDoPainel({ imagem: 'painel', km: null }), null);
+assert.strictEqual(L.kmDoPainel({ imagem: 'comprovante', km: 48250 }), null);
+assert.strictEqual(L.kmDoPainel(null), null);
+
 console.log('ok');

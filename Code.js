@@ -4,11 +4,12 @@
 
 const ABA = 'Lançamentos';
 const ABA_RESUMO = 'Resumo';
+const ABA_GRAFICOS = 'Gráficos';
 const GEMINI_MODELO = 'gemini-2.5-flash';
 
 const AJUDA = [
   'Fala, chefe! Sou o frentista. Me manda:',
-  '📷 Print do Shell Box com o km na legenda (ex.: 48250)',
+  '📷 Print do Shell Box com o km na legenda (ex.: 48250), ou sem legenda e depois uma foto do painel',
   '⛽ Ou digitado: valor litros km tipo, ex.: 72,40 11,20 48250 a (c = comum, a = aditivada)',
   '🔧 /manut 380 troca de óleo',
   '🏛️ /imposto 1200 IPVA',
@@ -18,11 +19,10 @@ const AJUDA = [
 ].join('\n');
 
 const PROMPT_GEMINI = [
-  'Este é um comprovante de abastecimento do app Shell Box. Responda só JSON:',
-  '{"data":"yyyy-mm-dd","litros":number,"precoLitro":number,"valorPago":number,"cashback":number,"tipo":string,"posto":string}',
-  'valorPago = valor do combustível depois dos descontos (posto, Shell Box), SEM abater "Créditos Shell" — créditos são dinheiro já pago. Se houver só "Valor total" sem descontos, use-o.',
-  'cashback = valor de cashback anunciado, ou 0.',
-  'tipo = nome do combustível como aparece (ex.: "Shell V-Power Gasolina", "Gasolina Comum").',
+  'A imagem é um comprovante de abastecimento do app Shell Box OU uma foto do painel do carro. Responda só JSON:',
+  '{"imagem":"comprovante"|"painel"|"outra","data":"yyyy-mm-dd","litros":number,"precoLitro":number,"valorPago":number,"cashback":number,"tipo":string,"posto":string,"km":number}',
+  'Se for comprovante: valorPago = valor do combustível depois dos descontos (posto, Shell Box), SEM abater "Créditos Shell" — créditos são dinheiro já pago. Se houver só "Valor total" sem descontos, use-o. cashback = valor de cashback anunciado, ou 0. tipo = nome do combustível como aparece (ex.: "Shell V-Power Gasolina", "Gasolina Comum"). km = null.',
+  'Se for painel: km = hodômetro total (ODO), nunca o parcial (TRIP); se não der pra ler com certeza, km = null. Os outros campos = null.',
 ].join('\n');
 
 function props() {
@@ -80,23 +80,15 @@ function processarMensagem(msg, agora) {
         data: inicioDoDia(agora), valorPago: m.valor, cashback: 0,
         litros: m.litros, km: m.km, combustivel: m.combustivel, posto: '',
       }).texto;
-    case 'km': {
-      const pendente = props().getProperty('PENDENTE');
-      if (!pendente) return AJUDA;
-      const a = JSON.parse(pendente);
-      a.data = new Date(a.data);
-      a.km = m.km;
-      const r = registrarAbastecimento(a);
-      if (r.ok) props().deleteProperty('PENDENTE'); // km recusado: o print continua esperando
-      return r.ok ? r.texto : r.texto + '\nManda o km certo, chefe.';
-    }
+    case 'km':
+      return props().getProperty('PENDENTE') ? usarKm(m.km) : AJUDA;
     case 'despesa':
       return gravarERetornar(montarDespesa(m), null, null);
     case 'comando':
       if (m.nome === 'resumo') return resumoTexto(agora);
       if (m.nome === 'desfazer') {
         const linha = desfazer();
-        return linha ? '↩️ Apaguei: ' + formatarConfirmacao(linha, null, null).replace(/^\S+ Anotado, chefe! /, '') : 'Não tem nada pra apagar, chefe.';
+        return linha ? '↩️ Apaguei: ' + descreverLinha(linha) : 'Não tem nada pra apagar, chefe.';
       }
       return AJUDA;
     default:
@@ -110,12 +102,25 @@ function idDaImagem(msg) {
   return null;
 }
 
+/** Foto: comprovante do Shell Box (abastecimento novo) ou painel (km do abastecimento pendente). */
 function processarPrint(fileId, legenda, agora) {
-  props().deleteProperty('PENDENTE'); // print novo sempre substitui o anterior
-  const a = normalizarGemini(lerPrint(fileId), agora);
+  const lido = lerPrint(fileId);
+  if (lido && lido.imagem === 'painel') {
+    const km = kmDoPainel(lido);
+    if (!km) return 'Não consegui ler o hodômetro nessa foto, chefe. Manda o km digitado.';
+    if (!props().getProperty('PENDENTE')) {
+      return `Li ${km} km no painel, mas não tem abastecimento esperando km. Manda o print do Shell Box primeiro.`;
+    }
+    return usarKm(km);
+  }
+
+  props().deleteProperty('PENDENTE'); // comprovante novo sempre substitui o anterior
+  const a = normalizarGemini(lido, agora);
   if (!a) {
     return 'Não consegui ler esse print, chefe. Manda digitado: valor litros km tipo (ex.: 72,40 11,20 48250 a)';
   }
+  const dup = acharDuplicado(dados(), a);
+  if (dup) return 'Esse já tá anotado, chefe: ' + descreverLinha(dup);
   a.km = parseKm(legenda);
   if (a.km) {
     const r = registrarAbastecimento(a);
@@ -124,14 +129,28 @@ function processarPrint(fileId, legenda, agora) {
     return r.texto + '\nManda o km certo, chefe.';
   }
   props().setProperty('PENDENTE', JSON.stringify(a));
-  return `Li aqui: ${a.litros.toFixed(2).replace('.', ',')} L por R$ ${(a.valorPago - a.cashback).toFixed(2).replace('.', ',')}. Qual o km, chefe?`;
+  return `Li aqui: ${fmtNum(a.litros)} L por R$ ${fmtNum(a.valorPago - a.cashback)}. Qual o km, chefe? (número ou foto do painel)`;
 }
 
-/** Valida, grava e devolve {ok, texto}. */
+/** Completa o abastecimento pendente com o km (digitado ou lido do painel). */
+function usarKm(km) {
+  const a = JSON.parse(props().getProperty('PENDENTE'));
+  a.data = new Date(a.data);
+  a.km = km;
+  const r = registrarAbastecimento(a);
+  if (r.ok) props().deleteProperty('PENDENTE'); // km recusado: o print continua esperando
+  return r.ok ? r.texto : r.texto + '\nManda o km certo, chefe.';
+}
+
+/** Valida, grava e devolve {ok, texto}. Um duplicado conta como ok: nada a gravar. */
 function registrarAbastecimento(a) {
-  const r = montarAbastecimento(a, kmAnterior());
+  const linhas = dados();
+  const dup = acharDuplicado(linhas, a);
+  if (dup) return { ok: true, texto: 'Esse já tá anotado, chefe: ' + descreverLinha(dup) };
+  const r = montarAbastecimento(a, kmAnteriorDe(linhas));
   if (r.erro) return { ok: false, texto: r.erro };
-  return { ok: true, texto: gravarERetornar(r.linha, r.kmRodado, r.aviso) };
+  const aviso = [r.aviso, avisoPreco(linhas, a.combustivel, r.linha[6])].filter(Boolean).join('\n') || null;
+  return { ok: true, texto: gravarERetornar(r.linha, r.kmRodado, aviso) };
 }
 
 function gravarERetornar(linha, kmRodado, aviso) {
@@ -191,13 +210,20 @@ function lerPrint(fileId) {
   }
 }
 
-/** Rodar uma vez no editor: desliga um webhook antigo, se houver, e cria o gatilho de 1 minuto. */
+/** Rodar uma vez no editor: desliga um webhook antigo, se houver, e (re)cria os gatilhos. */
 function configurarGatilho() {
   console.log(JSON.stringify(telegram('deleteWebhook', {})));
   ScriptApp.getProjectTriggers()
-    .filter(t => t.getHandlerFunction() === 'verificar')
+    .filter(t => ['verificar', 'resumoMensal'].includes(t.getHandlerFunction()))
     .forEach(t => ScriptApp.deleteTrigger(t));
   ScriptApp.newTrigger('verificar').timeBased().everyMinutes(1).create();
+  ScriptApp.newTrigger('resumoMensal').timeBased().onMonthDay(1).atHour(9).create();
+}
+
+/** Gatilho mensal (dia 1, ~9h): manda o resumo do mês anterior. */
+function resumoMensal() {
+  const p = mesAnterior(new Date());
+  enviar(props().getProperty('CHAT_ID'), formatarResumo(p.titulo, resumoPeriodo(dados(), p.inicio, p.fim)));
 }
 
 // ───────────────────────── Planilha ─────────────────────────
@@ -257,6 +283,9 @@ function configurarPlanilha() {
     ['R$/L Comum', c => `IFERROR(SUMIFS(${L}C:C,${noAno(c)},${L}F:F,"C",${L}D:D,">0")/SUMIFS(${L}D:D,${noAno(c)},${L}F:F,"C"),"")`],
     ['R$/L Aditivada', c => `IFERROR(SUMIFS(${L}C:C,${noAno(c)},${L}F:F,"A",${L}D:D,">0")/SUMIFS(${L}D:D,${noAno(c)},${L}F:F,"A"),"")`],
     ['Cashback', c => `SUMIFS(${L}I:I,${noAno(c)})`],
+    // R$/km: combustível só dos intervalos com Km/L (mesma base do Km rodado); total = gasto total ÷ km
+    ['R$/km combustível', c => `IFERROR(SUMPRODUCT(${anoArr(c)}*${L}C2:C)/SUMPRODUCT(${anoArr(c)}*${L}H2:H*${L}D2:D),"")`],
+    ['R$/km total', c => `IFERROR(${c}2/${c}7,"")`],
   ];
   // As fórmulas usam vírgula; em locale pt_BR o Sheets esperaria ";" e dá erro de análise.
   // Grava em en_US e volta: o Sheets converte as fórmulas para o locale original.
@@ -274,17 +303,51 @@ function configurarPlanilha() {
   rs.getRange(7, 2, 1, cols.length).setNumberFormat('#,##0');
   rs.setFrozenRows(1);
   rs.setFrozenColumns(1);
+  configurarGraficos(ss, L);
   SpreadsheetApp.flush();
   ss.setSpreadsheetLocale(locale);
 }
 
-/** Km do último abastecimento; null se não houver ou se ele não tiver km (aí não dá pra calcular Km/L). */
-function kmAnterior() {
+/**
+ * Aba Gráficos: tabelas auxiliares por fórmula (A:C R$/L, E:G Km/L, I:J gasto por mês) e três gráficos.
+ * Recriada do zero a cada configurarPlanilha. As tabelas ficam visíveis: gráfico ignora coluna oculta.
+ */
+function configurarGraficos(ss, L) {
+  const g = ss.getSheetByName(ABA_GRAFICOS) || ss.insertSheet(ABA_GRAFICOS);
+  g.getCharts().forEach(c => g.removeChart(c));
+  g.clear();
+  // Comum e Aditivada em colunas separadas; NA() vira buraco no gráfico (interpolateNulls liga os pontos).
+  const serie = col => `=ARRAYFORMULA(FILTER({${L}A2:A,IF(${L}F2:F="C",${L}${col}2:${col},NA()),` +
+    `IF(${L}F2:F="A",${L}${col}2:${col},NA())},${L}B2:B="Combustível",${L}${col}2:${col}<>""))`;
+  g.getRange('A1:C1').setValues([['Data', 'R$/L Comum', 'R$/L Aditivada']]);
+  g.getRange('A2').setFormula(serie('G'));
+  g.getRange('E1:G1').setValues([['Data', 'Km/L Comum', 'Km/L Aditivada']]);
+  g.getRange('E2').setFormula(serie('H'));
+  const temData = `${L}A2:A<>""`;
+  g.getRange('I1').setFormula(`=QUERY({ARRAYFORMULA(EOMONTH(FILTER(${L}A2:A,${temData}),-1)+1),FILTER(${L}C2:C,${temData})},` +
+    `"select Col1, sum(Col2) group by Col1 label Col1 'Mês', sum(Col2) 'Gasto'",0)`);
+  ['A2:A', 'E2:E'].forEach(r => g.getRange(r).setNumberFormat('dd/MM/yyyy'));
+  g.getRange('I2:I').setNumberFormat('MM/yyyy');
+  ['B2:C', 'J2:J'].forEach(r => g.getRange(r).setNumberFormat('R$ #,##0.00'));
+  g.getRange('F2:G').setNumberFormat('0.00');
+  g.getRange('A1:J1').setFontWeight('bold');
+  g.setFrozenRows(1);
+
+  const linha = (faixa, titulo, linhaPos) => g.newChart().asLineChart()
+    .addRange(g.getRange(faixa)).setNumHeaders(1)
+    .setOption('title', titulo).setOption('interpolateNulls', true).setOption('pointSize', 4)
+    .setPosition(linhaPos, 12, 0, 0).build();
+  g.insertChart(linha('A1:C', 'R$/L: Comum x Aditivada', 1));
+  g.insertChart(linha('E1:G', 'Km/L: Comum x Aditivada', 21));
+  g.insertChart(g.newChart().asColumnChart().addRange(g.getRange('I1:J')).setNumHeaders(1)
+    .setOption('title', 'Gasto por mês').setOption('legend', { position: 'none' })
+    .setPosition(41, 12, 0, 0).build());
+}
+
+/** Linhas de dados da aba Lançamentos, sem o cabeçalho. */
+function dados() {
   const sh = aba();
-  if (sh.getLastRow() < 2) return null;
-  const v = sh.getRange(2, 2, sh.getLastRow() - 1, 4).getValues(); // B..E
-  const ultimo = v.filter(r => r[0] === 'Combustível').pop();
-  return ultimo && typeof ultimo[3] === 'number' ? ultimo[3] : null;
+  return sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, COLUNAS.length).getValues() : [];
 }
 
 function gravarLinha(linha) {
@@ -301,29 +364,11 @@ function desfazer() {
   return linha;
 }
 
+/** /resumo: o ano corrente, calculado das linhas (mesmas contas da aba Resumo). */
 function resumoTexto(agora) {
-  SpreadsheetApp.flush();
-  const rs = planilha().getSheetByName(ABA_RESUMO);
-  const v = rs.getDataRange().getValues();
-  const col = v[0].indexOf(agora.getFullYear()) - 1;
-  if (col < 0) return 'Ano fora do Resumo, chefe. Roda configurarPlanilha() no editor pra estender.';
-  const val = rotulo => v.find(r => r[0] === rotulo)[col + 1];
-  const rs$ = n => typeof n === 'number' ? 'R$ ' + n.toFixed(2).replace('.', ',') : '—';
-  const num = n => typeof n === 'number' ? n.toFixed(2).replace('.', ',') : '—';
-  const linhas = [
-    `📊 ${agora.getFullYear()}`,
-    `Total: ${rs$(val('Gasto total'))}`,
-    `⛽ Combustível: ${rs$(val('Combustível'))}`,
-    `🔧 Manutenção: ${rs$(val('Manutenção'))}`,
-    `🏛️ Impostos: ${rs$(val('Imposto'))}`,
-    `🛡️ Seguro: ${rs$(val('Seguro'))}`,
-    `🛣️ ${typeof val('Km rodado') === 'number' ? val('Km rodado') : '—'} km · ${num(val('Km/L médio'))} km/L · ${rs$(val('R$/L médio'))}/L`,
-    `Comum: ${num(val('Km/L Comum'))} km/L · Aditivada: ${num(val('Km/L Aditivada'))} km/L`,
-    `💸 Cashback: ${rs$(val('Cashback'))}`,
-  ];
-  const sh = aba();
-  const dados = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, COLUNAS.length).getValues() : [];
-  const ultimo = dados.filter(r => r[1] === 'Combustível').pop();
-  if (ultimo) linhas.push('Último: ' + formatarConfirmacao(ultimo, null, null).replace(/^\S+ Anotado, chefe! /, ''));
-  return linhas.join('\n');
+  const ano = agora.getFullYear();
+  const linhas = dados();
+  const texto = formatarResumo(String(ano), resumoPeriodo(linhas, new Date(ano, 0, 1), new Date(ano + 1, 0, 1)));
+  const ultimo = combustiveis(linhas).pop();
+  return ultimo ? texto + '\nÚltimo: ' + descreverLinha(ultimo) : texto;
 }
