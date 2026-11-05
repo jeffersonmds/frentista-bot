@@ -96,5 +96,7 @@ assert.ok(txt.includes('05/11'), txt);
 txt = L.formatarConfirmacao(L.montarDespesa({ categoria: 'Manutenção', valor: 380, descricao: 'troca de óleo', data: hoje }), null, null);
 assert.ok(txt.includes('R$ 380,00') && txt.includes('troca de óleo'), txt);
 assert.ok(L.formatarConfirmacao(r142.linha, 300, 'confere').includes('\n'));
+// linha migrada sem litros não quebra
+assert.ok(L.formatarConfirmacao([hoje, 'Combustível', 100, '', '', 'C', '', '', '', ''], null, null).includes('R$ 100,00'));
 
 console.log('ok');

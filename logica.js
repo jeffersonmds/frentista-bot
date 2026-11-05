@@ -115,7 +115,7 @@ function montarDespesa(d) {
 }
 
 function fmtNum(n) {
-  return n.toFixed(2).replace('.', ',');
+  return typeof n === 'number' ? n.toFixed(2).replace('.', ',') : '—'; // linhas migradas podem não ter litros
 }
 
 function fmtData(d) {
