@@ -1,0 +1,8 @@
+# segredos e dados pessoais: nunca versionar
+.clasp.json
+migracao.local.js
+*.xlsx
+*.png
+*.jpg
+*.jpeg
+node_modules/
