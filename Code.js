@@ -114,11 +114,13 @@ function processarPrint(fileId, legenda, agora) {
     return usarKm(km);
   }
 
-  props().deleteProperty('PENDENTE'); // comprovante novo sempre substitui o anterior
+  // Falha de leitura não mexe no PENDENTE: o km ainda pode completar o abastecimento anterior.
+  if (lido && lido.imagem === 'outra') return 'Essa foto não é comprovante do Shell Box nem painel, chefe.';
   const a = normalizarGemini(lido, agora);
   if (!a) {
     return 'Não consegui ler esse print, chefe. Manda digitado: valor litros km tipo (ex.: 72,40 11,20 48250 a)';
   }
+  props().deleteProperty('PENDENTE'); // comprovante novo e válido substitui o anterior
   const dup = acharDuplicado(dados(), a);
   if (dup) return 'Esse já tá anotado, chefe: ' + descreverLinha(dup);
   a.km = parseKm(legenda);
@@ -265,7 +267,8 @@ function configurarPlanilha() {
   rs.clear();
   const L = `'${ABA}'!`;
   const noAno = c => `${L}A:A,">="&DATE(${c}$1,1,1),${L}A:A,"<"&DATE(${c}$1+1,1,1)`;
-  const anoArr = c => `(YEAR(${L}A2:A)=${c}$1)*(${L}H2:H<>"")`;
+  // Linhas do ano com Km/L e litros: a base de km rodado, km/L e R$/km
+  const anoArr = c => `(YEAR(${L}A2:A)=${c}$1)*(${L}H2:H<>"")*(${L}D2:D>0)`;
   const linhas = [
     ['Gasto total', c => `SUMIFS(${L}C:C,${noAno(c)})`],
     ['Combustível', c => `SUMIFS(${L}C:C,${noAno(c)},${L}B:B,"Combustível")`],
@@ -344,10 +347,14 @@ function configurarGraficos(ss, L) {
     .setPosition(41, 12, 0, 0).build());
 }
 
-/** Linhas de dados da aba Lançamentos, sem o cabeçalho. */
+const COLUNAS_NUMERICAS = [2, 3, 4, 6, 7, 8]; // Valor, Litros, Km, R$/L, Km/L, Cashback
+
+/** Linhas de dados da aba Lançamentos, sem o cabeçalho. Número digitado como texto vira número. */
 function dados() {
   const sh = aba();
-  return sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, COLUNAS.length).getValues() : [];
+  if (sh.getLastRow() < 2) return [];
+  return sh.getRange(2, 1, sh.getLastRow() - 1, COLUNAS.length).getValues().map(l => l.map((v, i) =>
+    typeof v === 'string' && v.trim() && COLUNAS_NUMERICAS.includes(i) ? (parseNumero(v) ?? v) : v));
 }
 
 function gravarLinha(linha) {

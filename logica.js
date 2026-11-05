@@ -198,7 +198,7 @@ function resumoPeriodo(linhas, inicio, fim) {
   const valor = l => (ehNumero(l[2]) ? l[2] : 0);
   const litros = l => (ehNumero(l[3]) ? l[3] : 0);
   const comb = combustiveis(no);
-  const comKmL = comb.filter(l => ehNumero(l[7]));
+  const comKmL = comb.filter(l => ehNumero(l[7]) && litros(l) > 0); // mesma base no numerador e no denominador
   const kmDe = ls => soma(ls, l => l[7] * litros(l));
   const kmLDe = ls => div(kmDe(ls), soma(ls, litros));
   const porCategoria = {};

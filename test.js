@@ -164,6 +164,9 @@ assert.strictEqual(rp.km, 120);
 assert.strictEqual(rp.litros, 20);
 assert.strictEqual(rp.rsKmCombustivel, 62 / 120);
 assert.strictEqual(rp.kmLAditivada, null);
+// linha com Km/L mas sem litros não entra no R$/km (revisão do Codex)
+rp = L.resumoPeriodo([linhas[1], [dia(9, 16), 'Combustível', 60, '', 1200, 'C', '', 12, '', '']], dia(9, 1), dia(10, 1));
+assert.strictEqual(rp.rsKmCombustivel, 62 / 120);
 // período vazio não quebra
 rp = L.resumoPeriodo(linhas, dia(1, 1), dia(2, 1));
 assert.strictEqual(rp.total, 0);
