@@ -20,7 +20,7 @@ Repositório público no GitHub: nenhum segredo nem dado pessoal versionado.
 
 ## Planilha
 
-Criada com `clasp create --type sheets` (script vinculado à planilha; nenhum ID de planilha no código).
+Criada com `clasp create --type sheets` (script vinculado à planilha). `configurarPlanilha()` salva o ID em `SHEET_ID` (Script Property) e fixa o fuso em America/Sao_Paulo; o web app abre a planilha por esse ID, porque não tem planilha "ativa".
 
 ### Aba `Lançamentos`
 
@@ -83,7 +83,8 @@ Números aceitam vírgula ou ponto decimal.
 - Segredos em Script Properties: `TELEGRAM_TOKEN`, `GEMINI_API_KEY`, `WEBHOOK_SECRET`, `CHAT_ID`. Nunca no código.
 - Webhook registrado com `?s=<WEBHOOK_SECRET>`; `doPost` descarta requisições com segredo errado (Apps Script não lê o header `X-Telegram-Bot-Api-Secret-Token`).
 - Mensagens de outro `chat.id` são ignoradas.
-- Deduplicação: último `update_id` processado guardado em PropertiesService; updates com id ≤ ao guardado são ignorados (Telegram reenvia quando a resposta do Apps Script é um redirect).
+- Deduplicação: os últimos 100 `update_id` processados ficam em PropertiesService; um id já visto é ignorado (Telegram reenvia quando a resposta do Apps Script é um redirect, e os ids podem não crescer depois de uma semana sem mensagens).
+- Um update por vez: `LockService` envolve o processamento inteiro; webhook com `max_connections: 1`.
 - `doPost` sempre retorna rápido e nunca lança; erros viram mensagem ao usuário.
 
 ## Código
