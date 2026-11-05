@@ -35,12 +35,12 @@ bot    📊 2026
 ## Como funciona
 
 ```
-iPhone ──print + km──▶ Telegram ──webhook──▶ Google Apps Script
-                                            ├─▶ Gemini Flash (lê o print)
-                                            └─▶ Planilha Google (Lançamentos + Resumo)
+iPhone ──print + km──▶ Telegram ◀──getUpdates a cada 1 min── Google Apps Script
+                                                              ├─▶ Gemini Flash (lê o print)
+                                                              └─▶ Planilha Google (Lançamentos + Resumo)
 ```
 
-Não tem servidor. O código roda no Apps Script, vinculado à planilha, de graça e sempre no ar. O Gemini Flash tem cota gratuita mais do que suficiente para alguns abastecimentos por mês.
+Não tem servidor. O código roda no Apps Script, vinculado à planilha, de graça e sempre no ar. Um gatilho de 1 minuto busca as mensagens novas, então a resposta chega em até um minuto. O Gemini Flash tem cota gratuita mais do que suficiente para alguns abastecimentos por mês.
 
 ## Comandos
 
@@ -108,27 +108,23 @@ Rode `clasp open-script` e vá em **Configurações do projeto → Propriedades 
 |---|---|
 | `TELEGRAM_TOKEN` | token do BotFather |
 | `GEMINI_API_KEY` | chave do AI Studio |
-| `WEBHOOK_SECRET` | uma senha aleatória qualquer (ex.: saída de `openssl rand -hex 16`) |
 | `CHAT_ID` | deixe vazio por enquanto |
-| `WEBAPP_URL` | preenchido no passo 6 |
 
 Nenhum segredo fica no código nem no git.
 
 ### 5. Monte a planilha
 
-No editor, escolha a função `configurarPlanilha` e clique em **Executar**. Na primeira vez o Google pede autorização: aceite, porque é o seu próprio script. Isso cria as abas `Lançamentos` e `Resumo`, ajusta o fuso da planilha para São Paulo e salva o ID dela em `SHEET_ID`. O web app não tem planilha "ativa", então usa esse ID.
+No editor, escolha a função `configurarPlanilha` e clique em **Executar**. Na primeira vez o Google pede autorização: aceite, porque é o seu próprio script. Isso cria as abas `Lançamentos` e `Resumo`, ajusta o fuso da planilha para São Paulo e salva o ID dela em `SHEET_ID`. O gatilho não tem planilha "ativa", então usa esse ID.
 
-### 6. Publique e ligue o webhook
+### 6. Ligue o gatilho
 
-```bash
-clasp deploy -d "v1"
-```
+No editor, execute `configurarGatilho`. O Google pede mais uma autorização (para criar gatilhos). Isso cria um gatilho que roda `verificar` a cada minuto.
 
-Copie a URL que termina em `/exec` (ou pegue em **Implantar → Gerenciar implantações**) e coloque em `WEBAPP_URL`. Depois, no editor, execute `configurarWebhook`. O log deve mostrar `"ok":true`.
+> Por que não webhook? O web app do Apps Script responde todo POST com um redirect 302. O Telegram trata isso como erro e reenvia a mesma mensagem com backoff, travando a fila. Polling de 1 minuto é mais simples e não precisa de deploy.
 
 ### 7. Diga ao bot quem é o dono
 
-Mande qualquer mensagem pro seu bot. Como `CHAT_ID` ainda está vazio, ele responde com o seu chat_id. Cole o número em `CHAT_ID`. A partir daí ele só responde a você.
+Mande qualquer mensagem pro seu bot. Como `CHAT_ID` ainda está vazio, em até um minuto ele responde com o seu chat_id. Cole o número em `CHAT_ID`. A partir daí ele só responde a você.
 
 Pronto: mande um print.
 
@@ -136,13 +132,9 @@ Pronto: mande um print.
 
 ```bash
 clasp push
-clasp deployments            # pega o deploymentId
-clasp redeploy <deploymentId> -d "v2"
 ```
 
-> O `/exec` sempre roda a versão publicada no deploy. Um `clasp push` sozinho não muda o bot no ar.
-
-Use o `redeploy`. Um `deploy` novo gera outra URL, e aí você teria que reconfigurar o webhook.
+O gatilho sempre roda o código salvo mais recente. Não tem deploy.
 
 ## Importando uma planilha antiga (opcional)
 
@@ -168,7 +160,7 @@ node test.js   # → ok
 ## Estrutura
 
 ```
-Code.js            webhook, Telegram, Gemini, planilha
+Code.js            polling, Telegram, Gemini, planilha
 logica.js          funções puras (rodam no Node e no Apps Script)
 test.js            testes da lógica
 exportar-xlsx.ps1  migração de planilha antiga
@@ -179,14 +171,14 @@ appsscript.json    manifesto do Apps Script
 
 - A planilha fica no **seu** Drive, e o script roda na **sua** conta Google.
 - Os prints passam pelo Telegram e pela API do Gemini pra serem lidos. Na cota gratuita, o Google pode usar o conteúdo enviado pra melhorar os modelos. É um comprovante de posto, mas vale saber.
-- O bot ignora qualquer chat que não seja o `CHAT_ID`, e o webhook exige o `WEBHOOK_SECRET` na URL.
+- O bot ignora qualquer chat que não seja o `CHAT_ID`. Não existe URL pública: é o script que vai buscar as mensagens no Telegram.
 
 ## Limitações
 
 - Só entende comprovantes do **Shell Box**. Outros apps provavelmente funcionam, porque o Gemini é esperto, mas não foram testados.
 - O Gemini pode ler errado. Confira a resposta e use `/desfazer` quando precisar.
 - Feito para um carro só.
-- O Apps Script responde ao Telegram com um redirect, e o Telegram às vezes reenvia a mensagem. O bot guarda o último `update_id` e ignora repetidas.
+- A resposta leva até um minuto (é o intervalo do gatilho).
 
 ## Licença
 

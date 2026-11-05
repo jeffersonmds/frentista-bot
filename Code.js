@@ -1,6 +1,6 @@
 // frentista-bot: Telegram + Gemini + Planilha Google.
 // Segredos ficam em Script Properties (Configurações do projeto → Propriedades do script):
-//   TELEGRAM_TOKEN, GEMINI_API_KEY, WEBHOOK_SECRET, CHAT_ID, WEBAPP_URL
+//   TELEGRAM_TOKEN, GEMINI_API_KEY, CHAT_ID
 
 const ABA = 'Lançamentos';
 const ABA_RESUMO = 'Resumo';
@@ -29,48 +29,43 @@ function props() {
   return PropertiesService.getScriptProperties();
 }
 
-// ───────────────────────── Webhook ─────────────────────────
+// ───────────────────────── Polling ─────────────────────────
+// ponytail: polling de 1 em 1 minuto em vez de webhook. O web app do Apps Script responde todo POST
+// com 302; o Telegram trata isso como erro, reenvia o mesmo update com backoff e trava a fila.
 
-function doPost(e) {
-  const ok = ContentService.createTextOutput('ok');
+/** Gatilho de 1 minuto (criado por configurarGatilho): busca mensagens novas e responde. */
+function verificar() {
+  // Uma execução por vez: leitura do km anterior, gravação, pendente e /desfazer não se cruzam.
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(1000)) return; // a execução anterior ainda está rodando; o próximo minuto pega
   try {
     const p = props();
-    if (!e || !e.parameter || e.parameter.s !== p.getProperty('WEBHOOK_SECRET')) return ok;
-    const update = JSON.parse(e.postData.contents);
-    const msg = update.message;
-    if (!msg) return ok;
-    const chatId = String(msg.chat.id);
-    const dono = p.getProperty('CHAT_ID');
-    if (dono && chatId !== dono) return ok;
-
-    // Um update por vez: leitura do km anterior, gravação, pendente e /desfazer não se cruzam.
-    // ponytail: lock global; se demorar >25s o update se perde e o usuário reenvia.
-    const lock = LockService.getScriptLock();
-    if (!lock.tryLock(25000)) return ok;
-    try {
-      // Telegram reenvia quando o Apps Script responde com redirect. Os ids nem sempre crescem
-      // (após uma semana parado o próximo é aleatório), então guarda os últimos vistos.
-      const vistos = JSON.parse(p.getProperty('UPDATES_VISTOS') || '[]');
-      if (vistos.includes(update.update_id)) return ok;
-      p.setProperty('UPDATES_VISTOS', JSON.stringify(vistos.concat(update.update_id).slice(-100)));
-
-      if (!dono) {
-        // Só antes de configurar: ajuda a descobrir o chat_id.
-        enviar(chatId, `Seu chat_id é ${chatId}. Coloque em CHAT_ID nas Script Properties.`);
-        return ok;
-      }
-      try {
-        enviar(chatId, processarMensagem(msg, new Date()));
-      } catch (err) {
-        enviar(chatId, 'Deu ruim aqui, chefe: ' + err.message + '\nManda de novo daqui a pouco.');
-      }
-    } finally {
-      lock.releaseLock();
+    const r = telegram('getUpdates', { offset: Number(p.getProperty('OFFSET') || 0), allowed_updates: ['message'] });
+    if (!r.ok) return console.error('getUpdates', JSON.stringify(r));
+    for (const update of r.result) {
+      // Confirma antes de processar: um update que quebra não fica repetindo a cada minuto.
+      p.setProperty('OFFSET', String(update.update_id + 1));
+      if (update.message) atender(update.message);
     }
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function atender(msg) {
+  const chatId = String(msg.chat.id);
+  const dono = props().getProperty('CHAT_ID');
+  if (!dono) {
+    // Só antes de configurar: ajuda a descobrir o chat_id.
+    return enviar(chatId, `Seu chat_id é ${chatId}. Coloque em CHAT_ID nas Script Properties.`);
+  }
+  if (chatId !== dono) return;
+  try {
+    enviar(chatId, processarMensagem(msg, new Date()));
   } catch (err) {
     console.error(err);
+    enviar(chatId, 'Deu ruim aqui, chefe: ' + err.message + '\nManda de novo.');
   }
-  return ok;
 }
 
 /** Decide o que fazer com a mensagem e devolve o texto da resposta. */
@@ -164,7 +159,11 @@ function lerPrint(fileId) {
   const token = props().getProperty('TELEGRAM_TOKEN');
   const arquivo = telegram('getFile', { file_id: fileId });
   if (!arquivo.ok) return null;
-  const blob = UrlFetchApp.fetch(`https://api.telegram.org/file/bot${token}/${arquivo.result.file_path}`).getBlob();
+  const caminho = arquivo.result.file_path;
+  const blob = UrlFetchApp.fetch(`https://api.telegram.org/file/bot${token}/${caminho}`).getBlob();
+  // O Telegram serve como application/octet-stream, que o Gemini recusa; o tipo vem da extensão.
+  const ext = (/\.(\w+)$/.exec(caminho) || [])[1] || '';
+  const mime = { png: 'image/png', webp: 'image/webp', heic: 'image/heic' }[ext.toLowerCase()] || 'image/jpeg';
 
   const res = UrlFetchApp.fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODELO}:generateContent`, {
@@ -175,7 +174,7 @@ function lerPrint(fileId) {
       payload: JSON.stringify({
         contents: [{ parts: [
           { text: PROMPT_GEMINI },
-          { inline_data: { mime_type: blob.getContentType() || 'image/jpeg', data: Utilities.base64Encode(blob.getBytes()) } },
+          { inline_data: { mime_type: mime, data: Utilities.base64Encode(blob.getBytes()) } },
         ] }],
         generationConfig: { responseMimeType: 'application/json', temperature: 0 },
       }),
@@ -192,16 +191,18 @@ function lerPrint(fileId) {
   }
 }
 
-/** Rodar uma vez no editor, depois do deploy. Usa WEBAPP_URL (a URL /exec do deploy). */
-function configurarWebhook() {
-  const p = props();
-  const url = p.getProperty('WEBAPP_URL') + '?s=' + encodeURIComponent(p.getProperty('WEBHOOK_SECRET'));
-  console.log(JSON.stringify(telegram('setWebhook', { url, drop_pending_updates: true, allowed_updates: ['message'], max_connections: 1 })));
+/** Rodar uma vez no editor: desliga um webhook antigo, se houver, e cria o gatilho de 1 minuto. */
+function configurarGatilho() {
+  console.log(JSON.stringify(telegram('deleteWebhook', {})));
+  ScriptApp.getProjectTriggers()
+    .filter(t => t.getHandlerFunction() === 'verificar')
+    .forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger('verificar').timeBased().everyMinutes(1).create();
 }
 
 // ───────────────────────── Planilha ─────────────────────────
 
-/** Planilha pelo ID salvo em configurarPlanilha: no web app não há planilha "ativa". */
+/** Planilha pelo ID salvo em configurarPlanilha: no gatilho não há planilha "ativa". */
 function planilha() {
   return SpreadsheetApp.openById(props().getProperty('SHEET_ID'));
 }

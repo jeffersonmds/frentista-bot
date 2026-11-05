@@ -11,7 +11,7 @@ Despesas do carro são lançadas à mão numa planilha xlsx (uma por ano). O aba
 Bot de Telegram em Google Apps Script. O usuário manda o print do Shell Box com o km na legenda; o Gemini Flash extrai os dados; o bot grava numa Planilha Google única (todos os anos a partir de 2026) e responde no tom de um frentista.
 
 ```
-iPhone ──print + legenda "48250"──▶ Telegram ──webhook──▶ Apps Script
+iPhone ──print + legenda "48250"──▶ Telegram ◀──getUpdates (gatilho 1 min)── Apps Script
                                                         ├─▶ Gemini Flash (lê o print)
                                                         └─▶ Planilha Google (vinculada ao script)
 ```
@@ -20,7 +20,7 @@ Repositório público no GitHub: nenhum segredo nem dado pessoal versionado.
 
 ## Planilha
 
-Criada com `clasp create --type sheets` (script vinculado à planilha). `configurarPlanilha()` salva o ID em `SHEET_ID` (Script Property) e fixa o fuso em America/Sao_Paulo; o web app abre a planilha por esse ID, porque não tem planilha "ativa".
+Criada com `clasp create --type sheets` (script vinculado à planilha). `configurarPlanilha()` salva o ID em `SHEET_ID` (Script Property) e fixa o fuso em America/Sao_Paulo; o gatilho abre a planilha por esse ID, porque não tem planilha "ativa".
 
 ### Aba `Lançamentos`
 
@@ -80,19 +80,19 @@ Números aceitam vírgula ou ponto decimal.
 
 ### Segurança e robustez
 
-- Segredos em Script Properties: `TELEGRAM_TOKEN`, `GEMINI_API_KEY`, `WEBHOOK_SECRET`, `CHAT_ID`. Nunca no código.
-- Webhook registrado com `?s=<WEBHOOK_SECRET>`; `doPost` descarta requisições com segredo errado (Apps Script não lê o header `X-Telegram-Bot-Api-Secret-Token`).
+- Segredos em Script Properties: `TELEGRAM_TOKEN`, `GEMINI_API_KEY`, `CHAT_ID`. Nunca no código.
+- Entrada por polling: gatilho de 1 minuto chama `getUpdates` com `offset` salvo em PropertiesService. Webhook foi descartado: o web app do Apps Script responde POST com 302, o Telegram trata como erro e reenvia o mesmo update com backoff, travando a fila (visto em produção em 2026-11-05).
 - Mensagens de outro `chat.id` são ignoradas.
-- Deduplicação: os últimos 100 `update_id` processados ficam em PropertiesService; um id já visto é ignorado (Telegram reenvia quando a resposta do Apps Script é um redirect, e os ids podem não crescer depois de uma semana sem mensagens).
-- Um update por vez: `LockService` envolve o processamento inteiro; webhook com `max_connections: 1`.
-- `doPost` sempre retorna rápido e nunca lança; erros viram mensagem ao usuário.
+- Deduplicação: o `offset` é gravado antes de processar cada update, então nada é processado duas vezes e um update que quebra não repete.
+- Uma execução por vez: `LockService.tryLock` no `verificar`; se a anterior ainda roda, a do minuto seguinte pega.
+- Erros no processamento de uma mensagem viram resposta ao usuário ("Deu ruim aqui, chefe").
 
 ## Código
 
 ```
 frentista-bot/
   appsscript.json
-  Code.js            # doPost, Telegram API, Gemini, leitura/escrita da planilha
+  Code.js            # polling, Telegram API, Gemini, leitura/escrita da planilha
   logica.js          # funções puras: parse de comandos/datas/números, cálculos, validações, normalização do JSON do Gemini
   test.js            # node test.js — asserts sobre logica.js com dados fictícios
   exportar-xlsx.ps1  # gera migracao.local.js a partir do xlsx
@@ -109,7 +109,7 @@ frentista-bot/
 ## Testes
 
 - `node test.js`: parse dos comandos e do abastecimento manual, datas opcionais, vírgula decimal, líquido = pago − cashback, km/L, validações de km e faixa de km/L, mapeamento V-Power/Comum → A/C.
-- Extração do Gemini: validada manualmente com dois prints reais (V-Power pago com créditos; Comum com cashback) antes de ligar o webhook. Prints não são versionados.
+- Extração do Gemini: validada manualmente com dois prints reais (V-Power pago com créditos; Comum com cashback) antes de ligar o gatilho. Prints não são versionados.
 
 ## Repositório público
 
@@ -119,7 +119,7 @@ frentista-bot/
 
 ## README (PT-BR)
 
-Capricho: nome e persona do bot, GIF/print de conversa com dados fictícios, o que faz, diagrama da arquitetura, passo a passo de instalação (BotFather, AI Studio, clasp, Script Properties, webhook), comandos, estrutura da planilha, como rodar os testes, privacidade (o que fica onde), custo (zero no free tier do Gemini e do Apps Script), limitações e licença.
+Capricho: nome e persona do bot, GIF/print de conversa com dados fictícios, o que faz, diagrama da arquitetura, passo a passo de instalação (BotFather, AI Studio, clasp, Script Properties, gatilho), comandos, estrutura da planilha, como rodar os testes, privacidade (o que fica onde), custo (zero no free tier do Gemini e do Apps Script), limitações e licença.
 
 ## Implantação
 
@@ -127,7 +127,7 @@ Capricho: nome e persona do bot, GIF/print de conversa com dados fictícios, o q
 2. `clasp create --type sheets --title "Despesas Carro"`.
 3. Migração: `exportar-xlsx.ps1` → `clasp push` → usuário executa `migrar()` no editor → apagar `migracao.local.js` e `clasp push`.
 4. Usuário preenche as Script Properties.
-5. `clasp deploy` (Web App, executa como o usuário, acesso: qualquer pessoa); usuário executa `configurarWebhook()` no editor.
+5. Usuário executa `configurarGatilho()` no editor (cria o gatilho de 1 minuto).
 6. Teste ponta a ponta com um print real.
 
 ## Fora do escopo
