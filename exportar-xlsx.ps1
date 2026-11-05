@@ -23,7 +23,7 @@ try {
     $data = { param($v)
         if ($v -is [double]) { return [datetime]::FromOADate($v).Date }
         $p = [datetime]::MinValue  # datas digitadas como texto
-        if ([datetime]::TryParseExact([string]$v, @('d/M/yyyy', 'dd/MM/yyyy'), $inv, 0, [ref]$p)) { return $p }
+        if ([datetime]::TryParseExact([string]$v, [string[]]@('d/M/yyyy', 'dd/MM/yyyy'), $inv, [Globalization.DateTimeStyles]::None, [ref]$p)) { return $p }
         $null }
 
     $combustivel = @(); $outros = @()
