@@ -31,10 +31,12 @@ bot    📊 2026
 - **Lê o print do Shell Box** com o Gemini: data, litros, valor, cashback e se foi gasolina comum ou aditivada (V-Power).
 - **Grava o custo real**: o valor que saiu do bolso menos o cashback. Créditos Shell Box contam como dinheiro, porque você já pagou por eles.
 - **Calcula o consumo** de cada abastecimento: (km atual − km anterior) ÷ litros. E reclama se o número sair absurdo, ou se o R$/L fugir mais de 15% da sua média (sinal de leitura errada).
+- **Avisa quando o consumo cai**: três abastecimentos seguidos 10% abaixo da sua média costumam ser pneu murcho ou manutenção atrasada.
 - **Lê o km do painel**: mandou o print sem legenda? Responda com uma foto do hodômetro.
 - **Não anota duas vezes**: o mesmo abastecimento (data, litros e valor) mandado de novo é ignorado.
-- **Anota o resto**: manutenção, impostos e seguro, por comando de texto.
-- **Resume o ano** na própria planilha e no `/resumo`, com custo por km e comum separada de aditivada, pra você descobrir se a aditivada compensa mesmo.
+- **Anota o resto**: manutenção, impostos e seguro, por comando de texto ou por foto da nota da oficina ou do boleto. O Gemini lê o valor, a data e a categoria.
+- **Resume qualquer período** na própria planilha e no `/resumo` (ano, mês ou mês passado), com custo por km e comum separada de aditivada, pra você descobrir se a aditivada compensa mesmo. No ano corrente, ainda mostra quanto o ano deve fechar no ritmo atual.
+- **Responde perguntas**: escreva "quanto gastei com manutenção esse ano?" e o Gemini responde olhando a planilha.
 - **Manda o resumo do mês** sozinho, todo dia 1, comparando com o mês anterior.
 - **Gráficos** de R$/L, km/L e gasto por mês numa aba da planilha.
 - **Uma planilha pra sempre**: todos os anos na mesma aba, com o resumo em colunas por ano.
@@ -60,7 +62,11 @@ Não tem servidor. O código roda no Apps Script, vinculado à planilha, de gra�
 | `/imposto 1200 IPVA` | Imposto (IPVA, licenciamento, multa...) |
 | `/seguro 3000` | Seguro |
 | `... 26/12` ou `... 26/12/2025` no fim | Data diferente de hoje (nos três comandos acima) |
-| `/resumo` | Gastos do ano, km rodado, consumo médio, custo por km, último abastecimento |
+| 🧾 foto da nota ou do boleto | Despesa lida da foto; a legenda, se houver, vira a descrição |
+| `/resumo` | Gastos do ano, km rodado, consumo médio, custo por km, previsão do ano, último abastecimento |
+| `/resumo outubro`, `/resumo 10/2025`, `/resumo 2025` | O mesmo resumo para outro mês ou ano |
+| `/mes` | Resumo do mês corrente |
+| qualquer pergunta | Resposta do Gemini com base na planilha, ex.: `qual foi o abastecimento mais caro?` |
 | `/desfazer` | Apaga o último lançamento |
 | `/start` | Ajuda |
 
@@ -179,13 +185,13 @@ appsscript.json    manifesto do Apps Script
 ## Privacidade
 
 - A planilha fica no **seu** Drive, e o script roda na **sua** conta Google.
-- Os prints passam pelo Telegram e pela API do Gemini pra serem lidos. Na cota gratuita, o Google pode usar o conteúdo enviado pra melhorar os modelos. É um comprovante de posto, mas vale saber.
+- Os prints passam pelo Telegram e pela API do Gemini pra serem lidos. Numa pergunta livre, a planilha inteira vai junto pro Gemini. Na cota gratuita, o Google pode usar o conteúdo enviado pra melhorar os modelos. São gastos de carro, mas vale saber.
 - O bot ignora qualquer chat que não seja o `CHAT_ID`. Não existe URL pública: é o script que vai buscar as mensagens no Telegram.
 
 ## Limitações
 
 - Só entende comprovantes do **Shell Box**. Outros apps provavelmente funcionam, porque o Gemini é esperto, mas não foram testados.
-- O Gemini pode ler errado. Confira a resposta e use `/desfazer` quando precisar. Se ele estiver fora do ar ou sem cota, o bot tenta de novo duas vezes antes de desistir.
+- O Gemini pode ler errado e pode errar conta numa pergunta livre. Confira a resposta e use `/desfazer` quando precisar. Se ele estiver fora do ar ou sem cota, o bot tenta de novo duas vezes antes de desistir.
 - Feito para um carro só.
 - A resposta leva até um minuto (é o intervalo do gatilho).
 

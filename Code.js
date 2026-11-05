@@ -15,14 +15,19 @@ const AJUDA = [
   '🏛️ /imposto 1200 IPVA',
   '🛡️ /seguro 3000',
   '   (data opcional no fim: 26/12 ou 26/12/2025)',
-  '📊 /resumo · ↩️ /desfazer',
+  '🧾 Ou foto da nota da oficina / boleto (legenda vira a descrição)',
+  '📊 /resumo (ano) · /mes · /resumo outubro · /resumo 2025',
+  '💬 Ou pergunta: "quanto gastei com manutenção esse ano?"',
+  '↩️ /desfazer',
 ].join('\n');
 
 const PROMPT_GEMINI = [
-  'A imagem é um comprovante de abastecimento do app Shell Box OU uma foto do painel do carro. Responda só JSON:',
-  '{"imagem":"comprovante"|"painel"|"outra","data":"yyyy-mm-dd","litros":number,"precoLitro":number,"valorPago":number,"cashback":number,"tipo":string,"posto":string,"km":number}',
+  'A imagem é um comprovante de abastecimento do app Shell Box, uma foto do painel do carro OU uma nota/recibo/boleto de despesa do carro. Responda só JSON:',
+  '{"imagem":"comprovante"|"painel"|"despesa"|"outra","data":"yyyy-mm-dd","litros":number,"precoLitro":number,"valorPago":number,"cashback":number,"tipo":string,"posto":string,"km":number,"categoria":string,"valor":number,"descricao":string}',
   'Se for comprovante: valorPago = valor do combustível depois dos descontos (posto, Shell Box), SEM abater "Créditos Shell" — créditos são dinheiro já pago. Se houver só "Valor total" sem descontos, use-o. cashback = valor de cashback anunciado, ou 0. tipo = nome do combustível como aparece (ex.: "Shell V-Power Gasolina", "Gasolina Comum"). km = null.',
   'Se for painel: km = hodômetro total (ODO), nunca o parcial (TRIP); se não der pra ler com certeza, km = null. Os outros campos = null.',
+  'Se for despesa do carro: categoria = "Manutenção" (oficina, peças, pneus, revisão, lavagem), "Imposto" (IPVA, licenciamento, multa, taxas do Detran) ou "Seguro"; valor = total pago ou a pagar; data = data do pagamento, ou da emissão se não houver; descricao = resumo curto, até 40 caracteres (ex.: "Troca de óleo e filtro", "IPVA 2027"). Os campos de abastecimento = null.',
+  'Comprovante de abastecimento é sempre "comprovante", nunca "despesa".',
 ].join('\n');
 
 function props() {
@@ -39,10 +44,13 @@ function verificar() {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) return; // a execução anterior ainda está rodando; o próximo minuto pega
   try {
+    const inicio = Date.now();
     const p = props();
     const r = telegram('getUpdates', { offset: Number(p.getProperty('OFFSET') || 0), allowed_updates: ['message'] });
     if (!r.ok) return console.error('getUpdates', JSON.stringify(r));
     for (const update of r.result) {
+      // Pergunta ao Gemini demora: perto do limite de 6 min, o resto fica pro próximo minuto.
+      if (Date.now() - inicio > 4 * 60 * 1000) break;
       // Confirma antes de processar: um update que quebra não fica repetindo a cada minuto.
       p.setProperty('OFFSET', String(update.update_id + 1));
       if (update.message) atender(update.message);
@@ -85,14 +93,16 @@ function processarMensagem(msg, agora) {
     case 'despesa':
       return gravarERetornar(montarDespesa(m), null, null);
     case 'comando':
-      if (m.nome === 'resumo') return resumoTexto(agora);
+      if (m.nome === 'resumo') return resumoTexto(agora, m.arg);
+      if (m.nome === 'mes') return resumoTexto(agora, 'mes');
       if (m.nome === 'desfazer') {
         const linha = desfazer();
         return linha ? '↩️ Apaguei: ' + descreverLinha(linha) : 'Não tem nada pra apagar, chefe.';
       }
       return AJUDA;
     default:
-      return AJUDA;
+      // Texto livre vira pergunta pro Gemini; comando desconhecido ou mensagem sem texto, a ajuda.
+      return msg.text && !msg.text.trim().startsWith('/') ? perguntar(msg.text.trim(), agora) : AJUDA;
   }
 }
 
@@ -114,8 +124,17 @@ function processarPrint(fileId, legenda, agora) {
     return usarKm(km);
   }
 
+  // Nota de oficina / boleto: despesa direta, sem mexer no abastecimento pendente.
+  if (lido && lido.imagem === 'despesa') {
+    const d = despesaDoGemini(lido, agora, legenda);
+    if (!d) return 'Não consegui ler o valor dessa nota, chefe. Manda digitado: /manut 380 troca de óleo';
+    const dup = acharDespesa(dados(), d);
+    if (dup) return 'Essa já tá anotada, chefe: ' + descreverLinha(dup);
+    return gravarERetornar(montarDespesa(d), null, null);
+  }
+
   // Falha de leitura não mexe no PENDENTE: o km ainda pode completar o abastecimento anterior.
-  if (lido && lido.imagem === 'outra') return 'Essa foto não é comprovante do Shell Box nem painel, chefe.';
+  if (lido && lido.imagem === 'outra') return 'Essa foto não é comprovante, painel nem nota do carro, chefe.';
   const a = normalizarGemini(lido, agora);
   if (!a) {
     return 'Não consegui ler esse print, chefe. Manda digitado: valor litros km tipo (ex.: 72,40 11,20 48250 a)';
@@ -151,7 +170,8 @@ function registrarAbastecimento(a) {
   if (dup) return { ok: true, texto: 'Esse já tá anotado, chefe: ' + descreverLinha(dup) };
   const r = montarAbastecimento(a, kmAnteriorDe(linhas));
   if (r.erro) return { ok: false, texto: r.erro };
-  const aviso = [r.aviso, avisoPreco(linhas, a.combustivel, r.linha[6])].filter(Boolean).join('\n') || null;
+  const aviso = [r.aviso, avisoPreco(linhas, a.combustivel, r.linha[6]), avisoConsumo(linhas, r.kmPorLitro)]
+    .filter(Boolean).join('\n') || null;
   return { ok: true, texto: gravarERetornar(r.linha, r.kmRodado, aviso) };
 }
 
@@ -175,7 +195,7 @@ function enviar(chatId, texto) {
   if (!r.ok) console.error('sendMessage', JSON.stringify(r)); // ponytail: sem retry; o lançamento já está na planilha
 }
 
-/** Baixa a imagem do Telegram e pede ao Gemini os dados do comprovante. null se falhar. */
+/** Baixa a imagem do Telegram e pede ao Gemini os dados dela. null se falhar. */
 function lerPrint(fileId) {
   const token = props().getProperty('TELEGRAM_TOKEN');
   const arquivo = telegram('getFile', { file_id: fileId });
@@ -185,7 +205,26 @@ function lerPrint(fileId) {
   // O Telegram serve como application/octet-stream, que o Gemini recusa; o tipo vem da extensão.
   const ext = (/\.(\w+)$/.exec(caminho) || [])[1] || '';
   const mime = { png: 'image/png', webp: 'image/webp', heic: 'image/heic' }[ext.toLowerCase()] || 'image/jpeg';
+  const texto = gemini([
+    { text: PROMPT_GEMINI },
+    { inline_data: { mime_type: mime, data: Utilities.base64Encode(blob.getBytes()) } },
+  ], true);
+  try {
+    return texto && JSON.parse(texto);
+  } catch (err) {
+    console.error('Gemini JSON', err);
+    return null;
+  }
+}
 
+/** Pergunta livre sobre os gastos: o Gemini responde olhando a planilha inteira. */
+function perguntar(pergunta, agora) {
+  const resposta = gemini([{ text: promptPergunta(pergunta, dados(), agora) }], false);
+  return resposta ? resposta.trim().slice(0, 4000) : 'Não consegui pensar agora, chefe. Tenta de novo daqui a pouco.';
+}
+
+/** Chama o Gemini e devolve o texto da resposta; null se falhar. */
+function gemini(parts, json) {
   const pedido = () => UrlFetchApp.fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODELO}:generateContent`, {
       method: 'post',
@@ -193,11 +232,8 @@ function lerPrint(fileId) {
       headers: { 'x-goog-api-key': props().getProperty('GEMINI_API_KEY') },
       muteHttpExceptions: true,
       payload: JSON.stringify({
-        contents: [{ parts: [
-          { text: PROMPT_GEMINI },
-          { inline_data: { mime_type: mime, data: Utilities.base64Encode(blob.getBytes()) } },
-        ] }],
-        generationConfig: { responseMimeType: 'application/json', temperature: 0 },
+        contents: [{ parts }],
+        generationConfig: json ? { responseMimeType: 'application/json', temperature: 0 } : { temperature: 0.2 },
       }),
     });
   // Erro passageiro (cota, sobrecarga): espera e tenta de novo, até 3 vezes no total.
@@ -213,9 +249,9 @@ function lerPrint(fileId) {
     return null;
   }
   try {
-    return JSON.parse(JSON.parse(res.getContentText()).candidates[0].content.parts[0].text);
+    return JSON.parse(res.getContentText()).candidates[0].content.parts[0].text;
   } catch (err) {
-    console.error('Gemini JSON', err);
+    console.error('Gemini resposta', err, res.getContentText());
     return null;
   }
 }
@@ -384,10 +420,16 @@ function desfazer() {
 }
 
 /** /resumo: o ano corrente, calculado das linhas (mesmas contas da aba Resumo). */
-function resumoTexto(agora) {
-  const ano = agora.getFullYear();
+function resumoTexto(agora, arg) {
+  const p = periodoDe(arg, agora);
+  if (!p) return 'Não entendi o período, chefe. Ex.: /resumo outubro, /resumo 10/2025, /resumo 2025 ou /mes';
   const linhas = dados();
-  const texto = formatarResumo(String(ano), resumoPeriodo(linhas, new Date(ano, 0, 1), new Date(ano + 1, 0, 1)));
-  const ultimo = combustiveis(linhas).pop();
-  return ultimo ? texto + '\nÚltimo: ' + descreverLinha(ultimo) : texto;
+  const extras = [];
+  if (!arg) { // ano corrente: previsão e último abastecimento
+    const prev = previsaoAno(linhas, agora);
+    if (prev !== null) extras.push(`🔮 No ritmo atual, ${p.titulo} fecha em R$ ${fmtNum(prev)}`);
+    const ultimo = combustiveis(linhas).pop();
+    if (ultimo) extras.push('Último: ' + descreverLinha(ultimo));
+  }
+  return [formatarResumo(p.titulo, resumoPeriodo(linhas, p.inicio, p.fim)), ...extras].join('\n');
 }

@@ -38,9 +38,11 @@ assert.strictEqual(m.categoria, 'Seguro');
 assert.strictEqual(m.descricao, '');
 assert.strictEqual(ymd(m.data), '2025-12-26');
 assert.strictEqual(L.parseMensagem('/imposto 1200 IPVA', hoje).categoria, 'Imposto');
-assert.deepStrictEqual(L.parseMensagem('/resumo', hoje), { tipo: 'comando', nome: 'resumo' });
-assert.deepStrictEqual(L.parseMensagem('/desfazer', hoje), { tipo: 'comando', nome: 'desfazer' });
-assert.deepStrictEqual(L.parseMensagem('/start', hoje), { tipo: 'comando', nome: 'start' });
+assert.deepStrictEqual(L.parseMensagem('/resumo', hoje), { tipo: 'comando', nome: 'resumo', arg: '' });
+assert.deepStrictEqual(L.parseMensagem('/resumo outubro 2025', hoje), { tipo: 'comando', nome: 'resumo', arg: 'outubro 2025' });
+assert.deepStrictEqual(L.parseMensagem('/mes', hoje), { tipo: 'comando', nome: 'mes', arg: '' });
+assert.deepStrictEqual(L.parseMensagem('/desfazer', hoje), { tipo: 'comando', nome: 'desfazer', arg: '' });
+assert.deepStrictEqual(L.parseMensagem('/start', hoje), { tipo: 'comando', nome: 'start', arg: '' });
 assert.deepStrictEqual(L.parseMensagem('48250', hoje), { tipo: 'km', km: 48250 });
 assert.strictEqual(L.parseMensagem('oi', hoje).tipo, 'invalido');
 assert.strictEqual(L.parseMensagem('/manut abc', hoje).tipo, 'invalido');
@@ -203,5 +205,64 @@ assert.strictEqual(L.comparacao({ total: 300, kmL: null }, { total: 600, kmL: 14
 assert.strictEqual(L.comparacao({ total: 600, kmL: 14 }, { total: 600, kmL: null }, 'outubro'),
   '📈 Gasto igual a outubro (R$ 600,00)');
 assert.strictEqual(L.comparacao({ total: 600 }, { total: 0 }, 'outubro'), '');
+
+// despesaDoGemini: nota de oficina / boleto
+let dg = L.despesaDoGemini({ imagem: 'despesa', categoria: 'Manutenção', valor: '280,00', data: '2026-11-03', descricao: 'Troca de óleo' }, hoje, '');
+assert.strictEqual(dg.categoria, 'Manutenção');
+assert.strictEqual(dg.valor, 280);
+assert.strictEqual(ymd(dg.data), '2026-11-3');
+assert.strictEqual(dg.descricao, 'Troca de óleo');
+dg = L.despesaDoGemini({ imagem: 'despesa', categoria: 'Imposto', valor: 1200, data: null, descricao: 'IPVA' }, hoje, ' IPVA 2027 ');
+assert.strictEqual(ymd(dg.data), '2026-11-5'); // sem data: hoje
+assert.strictEqual(dg.descricao, 'IPVA 2027'); // legenda manda
+assert.strictEqual(L.despesaDoGemini({ imagem: 'despesa', categoria: 'Lanche', valor: 30 }, hoje, ''), null);
+assert.strictEqual(L.despesaDoGemini({ imagem: 'despesa', categoria: 'Seguro', valor: 0 }, hoje, ''), null);
+assert.strictEqual(L.despesaDoGemini({ imagem: 'comprovante', categoria: 'Seguro', valor: 10 }, hoje, ''), null);
+assert.strictEqual(L.despesaDoGemini({ imagem: 'despesa', categoria: 'Seguro', valor: 10, descricao: '=HYPERLINK()' }, hoje, '').descricao, "'=HYPERLINK()");
+
+// acharDespesa: nota repetida
+const notas = [[dia(11, 3), 'Manutenção', 280, '', '', '', '', '', '', 'óleo']];
+assert.ok(L.acharDespesa(notas, { data: dia(11, 3), categoria: 'Manutenção', valor: 280 }));
+assert.strictEqual(L.acharDespesa(notas, { data: dia(11, 4), categoria: 'Manutenção', valor: 280 }), null);
+assert.strictEqual(L.acharDespesa(notas, { data: dia(11, 3), categoria: 'Seguro', valor: 280 }), null);
+assert.strictEqual(L.acharDespesa(notas, { data: dia(11, 3), categoria: 'Manutenção', valor: 281 }), null);
+
+// avisoConsumo: 3 últimos 10% abaixo da média dos anteriores
+const comKmL = kmls => kmls.map(k => [dia(1, 1), 'Combustível', 100, 10, 1, 'C', 5, k, '', '']);
+assert.match(L.avisoConsumo(comKmL([14, 14, 14, 14, 12, 12]), 12), /Consumo caiu/);
+assert.strictEqual(L.avisoConsumo(comKmL([14, 14, 14, 14, 12, 13.5]), 12), null); // um recente normal
+assert.strictEqual(L.avisoConsumo(comKmL([14, 14, 12, 12]), 12), null); // base curta
+assert.strictEqual(L.avisoConsumo(comKmL([14, 14, 14, 14, 12, 12]), null), null);
+
+// periodoDe
+const per = a => { const p = L.periodoDe(a, hoje); return p && [ymd(p.inicio), ymd(p.fim), p.titulo].join(' '); };
+assert.strictEqual(per(''), '2026-1-1 2027-1-1 2026');
+assert.strictEqual(per('2025'), '2025-1-1 2026-1-1 2025');
+assert.strictEqual(per('mes'), '2026-11-1 2026-12-1 novembro de 2026');
+assert.strictEqual(per('mês'), '2026-11-1 2026-12-1 novembro de 2026');
+assert.strictEqual(per('outubro'), '2026-10-1 2026-11-1 outubro de 2026');
+assert.strictEqual(per('Março'), '2026-3-1 2026-4-1 março de 2026');
+assert.strictEqual(per('marco'), '2026-3-1 2026-4-1 março de 2026');
+assert.strictEqual(per('dez'), '2025-12-1 2026-1-1 dezembro de 2025'); // ainda não chegou: ano passado
+assert.strictEqual(per('dezembro de 2026'), '2026-12-1 2027-1-1 dezembro de 2026');
+assert.strictEqual(per('10/2025'), '2025-10-1 2025-11-1 outubro de 2025');
+assert.strictEqual(per('13/2025'), null);
+assert.strictEqual(per('ma'), null);
+assert.strictEqual(per('banana'), null);
+
+// previsaoAno: Combustível/Manutenção no ritmo; Imposto/Seguro como estão
+const prev = [
+  [new Date(2026, 0, 1), 'Combustível', 310, 10, 1, 'C', 5, '', '', ''],
+  [new Date(2026, 0, 20), 'Imposto', 1000, '', '', '', '', '', '', 'IPVA'],
+];
+assert.strictEqual(Math.round(L.previsaoAno(prev, new Date(2026, 0, 31, 15))), 3650 + 1000); // R$ 10/dia em 31 dias → 365 dias
+assert.strictEqual(L.previsaoAno(prev, new Date(2026, 0, 10)), null); // menos de 30 dias
+assert.strictEqual(L.previsaoAno([], hoje), null);
+
+// promptPergunta: CSV com data ISO e a pergunta no fim
+const pp = L.promptPergunta('quanto gastei?', [[dia(2, 3), 'Manutenção', 280, '', '', '', '', '', '', 'óleo; filtro']], hoje);
+assert.match(pp, /2026-02-03;Manutenção;280;;;;;;;óleo  filtro/);
+assert.match(pp, /Hoje é 2026-11-05/);
+assert.match(pp, /quanto gastei\?$/);
 
 console.log('ok');

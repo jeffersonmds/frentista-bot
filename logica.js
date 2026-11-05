@@ -46,8 +46,8 @@ function parseMensagem(texto, hoje) {
   if (t.startsWith('/')) {
     const partes = t.split(/\s+/);
     const cmd = partes[0].toLowerCase().replace(/@.*/, ''); // /resumo@MeuBot → /resumo
-    if (cmd === '/resumo' || cmd === '/desfazer' || cmd === '/start') {
-      return { tipo: 'comando', nome: cmd.slice(1) };
+    if (['/resumo', '/mes', '/desfazer', '/start'].includes(cmd)) {
+      return { tipo: 'comando', nome: cmd.slice(1), arg: partes.slice(1).join(' ') };
     }
     const categoria = CATEGORIAS_COMANDO[cmd];
     if (!categoria) return invalido;
@@ -84,6 +84,22 @@ function arred2(n) {
   return Math.round(n * 100) / 100;
 }
 
+/** "yyyy-mm-dd" do Gemini → Date; hoje se faltar ou for inválida. */
+function dataDoGemini(s, hoje) {
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || ''));
+  return (iso && parseData(`${iso[3]}/${iso[2]}/${iso[1]}`, hoje)) || inicioDoDia(hoje);
+}
+
+/** Nota de oficina ou boleto lido pelo Gemini → {categoria, valor, data, descricao}; null se não dá. */
+function despesaDoGemini(obj, hoje, legenda) {
+  if (!obj || obj.imagem !== 'despesa') return null;
+  const categoria = Object.values(CATEGORIAS_COMANDO).find(c => c === obj.categoria);
+  const valor = parseNumero(obj.valor);
+  if (!categoria || !(valor > 0)) return null;
+  const descricao = String(legenda || '').trim() || String(obj.descricao || '').trim();
+  return { categoria, valor: arred2(valor), data: dataDoGemini(obj.data, hoje), descricao: textoSeguro(descricao) };
+}
+
 /** Limpa o JSON devolvido pelo Gemini; null se não dá pra confiar nele. */
 function normalizarGemini(obj, hoje) {
   if (!obj || typeof obj !== 'object') return null;
@@ -92,8 +108,7 @@ function normalizarGemini(obj, hoje) {
   if (!(litros > 0) || !(valorPago > 0)) return null; // ex.: "Total R$ 0,00" quando pago com créditos
   const cashback = obj.cashback == null ? 0 : parseNumero(obj.cashback);
   if (cashback === null || cashback < 0 || cashback >= valorPago) return null;
-  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(obj.data || ''));
-  const data = iso ? parseData(`${iso[3]}/${iso[2]}/${iso[1]}`, hoje) || inicioDoDia(hoje) : inicioDoDia(hoje);
+  const data = dataDoGemini(obj.data, hoje);
   const tipo = String(obj.tipo || '').toLowerCase();
   return {
     data,
@@ -180,6 +195,12 @@ function acharDuplicado(linhas, a) {
     ehNumero(l[2]) && Math.abs(l[2] - valor) < 0.005) || null;
 }
 
+/** Despesa já lançada com mesmo dia, categoria e valor (nota mandada duas vezes); senão null. */
+function acharDespesa(linhas, d) {
+  return linhas.find(l => mesmoDia(l[0], d.data) && l[1] === d.categoria &&
+    ehNumero(l[2]) && Math.abs(l[2] - d.valor) < 0.005) || null;
+}
+
 const PRECO_DESVIO = 0.15;
 
 /** Avisa se o R$/L foge mais de 15% da média dos últimos 10 do mesmo tipo (mínimo 3). */
@@ -261,6 +282,84 @@ function comparacao(atual, anterior, mes) {
   return `📈 Gasto ${gasto} (R$ ${fmtNum(anterior.total)})${kmL}`;
 }
 
+const CONSUMO_QUEDA = 0.10;
+
+/**
+ * Avisa quando os 3 últimos km/L (contando o novo) ficaram todos 10% abaixo da média
+ * dos 10 anteriores (mínimo 3). Pneu murcho, filtro, vela: algo mudou.
+ */
+function avisoConsumo(linhas, novoKmL) {
+  if (!ehNumero(novoKmL)) return null;
+  const kmLs = combustiveis(linhas).filter(l => ehNumero(l[7])).map(l => l[7]).concat(novoKmL);
+  const recentes = kmLs.slice(-3);
+  const base = kmLs.slice(-13, -3);
+  if (recentes.length < 3 || base.length < 3) return null;
+  const media = base.reduce((s, k) => s + k, 0) / base.length;
+  return recentes.every(k => k < media * (1 - CONSUMO_QUEDA))
+    ? `⚠️ Consumo caiu: os 3 últimos ficaram abaixo de ${fmtNum(media * (1 - CONSUMO_QUEDA))} km/L (sua média é ${fmtNum(media)}). Vale olhar pneu e manutenção.`
+    : null;
+}
+
+const semAcento = s => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+/**
+ * "/resumo <arg>": "" (ano corrente), "2025", "outubro", "out", "10/2026" ou "mes" (mês corrente)
+ * → {inicio, fim, titulo}; null se não entendeu. Mês sem ano depois do atual = ano passado.
+ */
+function periodoDe(arg, agora) {
+  const t = semAcento(String(arg || '').trim());
+  const mes = (ano, m) => ({ inicio: new Date(ano, m, 1), fim: new Date(ano, m + 1, 1), titulo: `${MESES[m]} de ${ano}` });
+  const ano = a => ({ inicio: new Date(a, 0, 1), fim: new Date(a + 1, 0, 1), titulo: String(a) });
+  if (!t) return ano(agora.getFullYear());
+  if (t === 'mes') return mes(agora.getFullYear(), agora.getMonth());
+  let m = /^(20\d\d)$/.exec(t);
+  if (m) return ano(Number(m[1]));
+  m = /^(\d{1,2})\/(20\d\d)$/.exec(t);
+  if (m && m[1] >= 1 && m[1] <= 12) return mes(Number(m[2]), m[1] - 1);
+  m = /^([a-z]{3,})(?:\s+(?:de\s+)?(20\d\d))?$/.exec(t);
+  const i = m ? MESES.findIndex(n => semAcento(n).startsWith(m[1])) : -1;
+  if (i < 0) return null;
+  if (m[2]) return mes(Number(m[2]), i);
+  return mes(i > agora.getMonth() ? agora.getFullYear() - 1 : agora.getFullYear(), i);
+}
+
+/**
+ * Projeção do ano: Combustível e Manutenção no ritmo diário desde o 1º lançamento do ano;
+ * Imposto e Seguro como já pagos (são anuais). null com menos de 30 dias de dados.
+ */
+function previsaoAno(linhas, agora) {
+  const ano = agora.getFullYear();
+  const doAno = linhas.filter(l => l[0] instanceof Date && l[0].getFullYear() === ano && l[0] <= agora && ehNumero(l[2]));
+  if (!doAno.length) return null;
+  const inicio = doAno.reduce((m, l) => (l[0] < m ? l[0] : m), doAno[0][0]);
+  const dia = 86400000;
+  const passados = (inicioDoDia(agora) - inicioDoDia(inicio)) / dia + 1;
+  if (passados < 30) return null;
+  const totalDias = (new Date(ano + 1, 0, 1) - inicioDoDia(inicio)) / dia;
+  const soma = f => doAno.filter(f).reduce((s, l) => s + l[2], 0);
+  const ritmo = soma(l => ['Combustível', 'Manutenção'].includes(l[1]));
+  return ritmo * totalDias / passados + soma(l => !['Combustível', 'Manutenção'].includes(l[1]));
+}
+
+/** Prompt da pergunta livre: os lançamentos vão como CSV. */
+function promptPergunta(pergunta, linhas, hoje) {
+  const iso = d => (d instanceof Date ? [d.getFullYear(), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0')].join('-') : '');
+  const csv = linhas.map(l => [iso(l[0])].concat(l.slice(1).map(v => String(v).replace(/[;\n]/g, ' '))).join(';'));
+  return [
+    'Você é o frentista-bot, que anota os gastos do carro do usuário. Responda em português do Brasil,',
+    'curto (até 5 linhas), texto puro sem markdown, valores como R$ 1.234,56, tom simpático de frentista ("chefe").',
+    `Hoje é ${iso(hoje)}. Use só os dados abaixo; se eles não respondem, diga isso. Não invente.`,
+    'Colunas: Data;Categoria;Valor (R$ pago, já sem cashback);Litros;Km (hodômetro);Tipo (C comum, A aditivada);',
+    'R$/L;Km/L (km rodados desde o abastecimento anterior ÷ litros deste);Cashback;Descrição (posto ou detalhe).',
+    'Se a mensagem não for uma pergunta sobre os gastos do carro, responda numa linha que pode mandar /start pra ver os comandos.',
+    '',
+    COLUNAS.join(';'),
+    ...csv,
+    '',
+    'Mensagem do usuário: ' + pergunta,
+  ].join('\n');
+}
+
 /** Km do hodômetro lido pelo Gemini numa foto do painel; null se não deu. */
 function kmDoPainel(obj) {
   if (!obj || obj.imagem !== 'painel') return null;
@@ -273,6 +372,7 @@ if (typeof module !== 'undefined') {
     COLUNAS, parseNumero, parseKm, parseData, parseMensagem, textoSeguro,
     normalizarGemini, montarAbastecimento, montarDespesa, formatarConfirmacao,
     descreverLinha, kmAnteriorDe, acharDuplicado, avisoPreco, resumoPeriodo, formatarResumo,
-    mesAnterior, kmDoPainel, comparacao,
+    mesAnterior, kmDoPainel, comparacao, despesaDoGemini, acharDespesa, avisoConsumo, periodoDe,
+    previsaoAno, promptPergunta,
   };
 }
