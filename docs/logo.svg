@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="frentista-bot">
+  <!-- fundo -->
+  <rect width="256" height="256" rx="56" fill="#1F7A5C"/>
+  <circle cx="128" cy="132" r="96" fill="#26936E"/>
+
+  <!-- balão de conversa -->
+  <path d="M168 40h52a14 14 0 0 1 14 14v28a14 14 0 0 1-14 14h-30l-14 13v-13h-8a14 14 0 0 1-14-14V54a14 14 0 0 1 14-14z" fill="#FFFFFF"/>
+  <circle cx="179" cy="68" r="5" fill="#1F7A5C"/>
+  <circle cx="194" cy="68" r="5" fill="#1F7A5C"/>
+  <circle cx="209" cy="68" r="5" fill="#1F7A5C"/>
+
+  <!-- mangueira e bico -->
+  <path d="M150 112h14a12 12 0 0 1 12 12v58a10 10 0 0 0 20 0v-46" fill="none" stroke="#14213D" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="187" y="104" width="18" height="34" rx="5" fill="#14213D"/>
+  <path d="M190 108h-14l-6 10h20z" fill="#14213D"/>
+
+  <!-- corpo da bomba -->
+  <rect x="70" y="92" width="84" height="122" rx="14" fill="#FFB703"/>
+  <rect x="62" y="206" width="100" height="18" rx="6" fill="#14213D"/>
+
+  <!-- boné de frentista -->
+  <path d="M74 96c0-26 18-40 38-40s38 14 38 40z" fill="#E63946"/>
+  <rect x="66" y="90" width="64" height="10" rx="5" fill="#B5222E"/>
+  <circle cx="112" cy="58" r="5" fill="#B5222E"/>
+
+  <!-- visor = rosto -->
+  <rect x="84" y="112" width="56" height="44" rx="10" fill="#14213D"/>
+  <circle cx="101" cy="130" r="6" fill="#FFFFFF"/>
+  <circle cx="123" cy="130" r="6" fill="#FFFFFF"/>
+  <path d="M102 143q10 8 20 0" fill="none" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- gota -->
+  <path d="M112 168c-8 10-12 16-12 22a12 12 0 0 0 24 0c0-6-4-12-12-22z" fill="#E63946"/>
+</svg>

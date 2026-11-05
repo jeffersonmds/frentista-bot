@@ -1,4 +1,6 @@
-# ⛽ frentista-bot
+<p align="center"><img src="docs/logo.svg" width="160" alt="frentista-bot"></p>
+
+<h1 align="center">frentista-bot</h1>
 
 Um bot de Telegram que anota as despesas do carro pra você. Abasteceu pelo **Shell Box**? Manda o print do comprovante com o km na legenda e o frentista lança tudo numa Planilha Google: litros, valor, preço por litro, consumo e cashback.
 
