@@ -186,7 +186,7 @@ function lerPrint(fileId) {
   const ext = (/\.(\w+)$/.exec(caminho) || [])[1] || '';
   const mime = { png: 'image/png', webp: 'image/webp', heic: 'image/heic' }[ext.toLowerCase()] || 'image/jpeg';
 
-  const res = UrlFetchApp.fetch(
+  const pedido = () => UrlFetchApp.fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODELO}:generateContent`, {
       method: 'post',
       contentType: 'application/json',
@@ -200,6 +200,14 @@ function lerPrint(fileId) {
         generationConfig: { responseMimeType: 'application/json', temperature: 0 },
       }),
     });
+  // Erro passageiro (cota, sobrecarga): espera e tenta de novo, até 3 vezes no total.
+  let res = pedido();
+  for (const espera of [3000, 8000]) {
+    if (![429, 500, 503].includes(res.getResponseCode())) break;
+    console.warn('Gemini', res.getResponseCode(), 'tentando de novo');
+    Utilities.sleep(espera);
+    res = pedido();
+  }
   if (res.getResponseCode() !== 200) {
     console.error('Gemini', res.getResponseCode(), res.getContentText());
     return null;
@@ -225,7 +233,11 @@ function configurarGatilho() {
 /** Gatilho mensal (dia 1, ~9h): manda o resumo do mês anterior. */
 function resumoMensal() {
   const p = mesAnterior(new Date());
-  enviar(props().getProperty('CHAT_ID'), formatarResumo(p.titulo, resumoPeriodo(dados(), p.inicio, p.fim)));
+  const antes = mesAnterior(p.inicio);
+  const linhas = dados();
+  const atual = resumoPeriodo(linhas, p.inicio, p.fim);
+  const comp = comparacao(atual, resumoPeriodo(linhas, antes.inicio, antes.fim), MESES[antes.inicio.getMonth()]);
+  enviar(props().getProperty('CHAT_ID'), formatarResumo(p.titulo, atual) + (comp ? '\n' + comp : ''));
 }
 
 // ───────────────────────── Planilha ─────────────────────────

@@ -236,7 +236,7 @@ function formatarResumo(titulo, r) {
     `🔧 Manutenção: ${cat('Manutenção')}`,
     `🏛️ Impostos: ${cat('Imposto')}`,
     `🛡️ Seguro: ${cat('Seguro')}`,
-    `🛣️ ${milhar(String(r.km))} km ·${fmtNum(r.kmL)} km/L · ${rs(r.rsL)}/L`,
+    `🛣️ ${milhar(String(r.km))} km · ${fmtNum(r.kmL)} km/L · ${rs(r.rsL)}/L`,
     `💰 ${rs(r.rsKmCombustivel)}/km só combustível · ${rs(r.rsKmTotal)}/km com tudo`,
     `Comum: ${fmtNum(r.kmLComum)} km/L · Aditivada: ${fmtNum(r.kmLAditivada)} km/L`,
     `💸 Cashback: ${rs(r.cashback)}`,
@@ -252,6 +252,15 @@ function mesAnterior(agora) {
   return { inicio, fim: new Date(agora.getFullYear(), agora.getMonth(), 1), titulo: `${MESES[inicio.getMonth()]} de ${inicio.getFullYear()}` };
 }
 
+/** Linha "vs mês anterior" do resumo mensal; '' se o mês anterior não teve gasto. */
+function comparacao(atual, anterior, mes) {
+  if (!(anterior.total > 0)) return '';
+  const d = Math.round((atual.total - anterior.total) / anterior.total * 100);
+  const gasto = d === 0 ? `igual a ${mes}` : `${Math.abs(d)}% a ${d > 0 ? 'mais' : 'menos'} que ${mes}`;
+  const kmL = ehNumero(atual.kmL) && ehNumero(anterior.kmL) ? ` · km/L era ${fmtNum(anterior.kmL)}` : '';
+  return `📈 Gasto ${gasto} (R$ ${fmtNum(anterior.total)})${kmL}`;
+}
+
 /** Km do hodômetro lido pelo Gemini numa foto do painel; null se não deu. */
 function kmDoPainel(obj) {
   if (!obj || obj.imagem !== 'painel') return null;
@@ -264,6 +273,6 @@ if (typeof module !== 'undefined') {
     COLUNAS, parseNumero, parseKm, parseData, parseMensagem, textoSeguro,
     normalizarGemini, montarAbastecimento, montarDespesa, formatarConfirmacao,
     descreverLinha, kmAnteriorDe, acharDuplicado, avisoPreco, resumoPeriodo, formatarResumo,
-    mesAnterior, kmDoPainel,
+    mesAnterior, kmDoPainel, comparacao,
   };
 }

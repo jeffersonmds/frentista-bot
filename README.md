@@ -35,7 +35,7 @@ bot    📊 2026
 - **Não anota duas vezes**: o mesmo abastecimento (data, litros e valor) mandado de novo é ignorado.
 - **Anota o resto**: manutenção, impostos e seguro, por comando de texto.
 - **Resume o ano** na própria planilha e no `/resumo`, com custo por km e comum separada de aditivada, pra você descobrir se a aditivada compensa mesmo.
-- **Manda o resumo do mês** sozinho, todo dia 1.
+- **Manda o resumo do mês** sozinho, todo dia 1, comparando com o mês anterior.
 - **Gráficos** de R$/L, km/L e gasto por mês numa aba da planilha.
 - **Uma planilha pra sempre**: todos os anos na mesma aba, com o resumo em colunas por ano.
 
@@ -185,7 +185,7 @@ appsscript.json    manifesto do Apps Script
 ## Limitações
 
 - Só entende comprovantes do **Shell Box**. Outros apps provavelmente funcionam, porque o Gemini é esperto, mas não foram testados.
-- O Gemini pode ler errado. Confira a resposta e use `/desfazer` quando precisar.
+- O Gemini pode ler errado. Confira a resposta e use `/desfazer` quando precisar. Se ele estiver fora do ar ou sem cota, o bot tenta de novo duas vezes antes de desistir.
 - Feito para um carro só.
 - A resposta leva até um minuto (é o intervalo do gatilho).
 

@@ -195,4 +195,13 @@ assert.strictEqual(L.kmDoPainel({ imagem: 'painel', km: null }), null);
 assert.strictEqual(L.kmDoPainel({ imagem: 'comprovante', km: 48250 }), null);
 assert.strictEqual(L.kmDoPainel(null), null);
 
+// comparacao com o mês anterior
+assert.strictEqual(L.comparacao({ total: 672, kmL: 14.1 }, { total: 600, kmL: 14.5 }, 'outubro'),
+  '📈 Gasto 12% a mais que outubro (R$ 600,00) · km/L era 14,50');
+assert.strictEqual(L.comparacao({ total: 300, kmL: null }, { total: 600, kmL: 14.5 }, 'outubro'),
+  '📈 Gasto 50% a menos que outubro (R$ 600,00)');
+assert.strictEqual(L.comparacao({ total: 600, kmL: 14 }, { total: 600, kmL: null }, 'outubro'),
+  '📈 Gasto igual a outubro (R$ 600,00)');
+assert.strictEqual(L.comparacao({ total: 600 }, { total: 0 }, 'outubro'), '');
+
 console.log('ok');
