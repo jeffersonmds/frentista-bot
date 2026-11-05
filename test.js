@@ -176,6 +176,11 @@ assert.ok(txt.includes('janeiro de 2026') && txt.includes('—'), txt);
 txt = L.formatarResumo('2026', L.resumoPeriodo(linhas, dia(1, 1), new Date(2027, 0, 1)));
 assert.ok(txt.includes('/km só combustível') && txt.includes('400 km'), txt);
 
+// separador de milhar
+txt = L.formatarResumo('2026', { ...L.resumoPeriodo([], dia(1, 1), dia(2, 1)), total: 8678.22, km: 10035 });
+assert.ok(txt.includes('R$ 8.678,22') && txt.includes('10.035 km'), txt);
+assert.ok(L.formatarConfirmacao([hoje, 'Seguro', 3684.03, '', '', '', '', '', '', ''], null, null).includes('R$ 3.684,03'));
+
 // mesAnterior: inclusive virada de ano
 let ma = L.mesAnterior(new Date(2026, 0, 1, 9));
 assert.strictEqual(ymd(ma.inicio), '2025-12-1');

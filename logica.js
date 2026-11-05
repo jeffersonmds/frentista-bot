@@ -126,8 +126,13 @@ function montarDespesa(d) {
   return [d.data, d.categoria, d.valor, '', '', '', '', '', '', d.descricao || ''];
 }
 
+const milhar = s => s.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+
+/** 8678.2 → "8.678,20"; não-número → "—" (linhas migradas podem não ter litros). */
 function fmtNum(n) {
-  return typeof n === 'number' ? n.toFixed(2).replace('.', ',') : '—'; // linhas migradas podem não ter litros
+  if (typeof n !== 'number' || !isFinite(n)) return '—';
+  const [inteiro, dec] = n.toFixed(2).split('.');
+  return milhar(inteiro) + ',' + dec;
 }
 
 function fmtData(d) {
@@ -231,7 +236,7 @@ function formatarResumo(titulo, r) {
     `🔧 Manutenção: ${cat('Manutenção')}`,
     `🏛️ Impostos: ${cat('Imposto')}`,
     `🛡️ Seguro: ${cat('Seguro')}`,
-    `🛣️ ${r.km} km · ${fmtNum(r.kmL)} km/L · ${rs(r.rsL)}/L`,
+    `🛣️ ${milhar(String(r.km))} km ·${fmtNum(r.kmL)} km/L · ${rs(r.rsL)}/L`,
     `💰 ${rs(r.rsKmCombustivel)}/km só combustível · ${rs(r.rsKmTotal)}/km com tudo`,
     `Comum: ${fmtNum(r.kmLComum)} km/L · Aditivada: ${fmtNum(r.kmLAditivada)} km/L`,
     `💸 Cashback: ${rs(r.cashback)}`,
