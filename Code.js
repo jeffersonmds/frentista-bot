@@ -4,7 +4,6 @@
 
 const ABA = 'Lançamentos';
 const ABA_RESUMO = 'Resumo';
-const ANOS = [2026, 2027, 2028, 2029, 2030];
 const GEMINI_MODELO = 'gemini-2.5-flash';
 
 const AJUDA = [
@@ -38,33 +37,35 @@ function doPost(e) {
     const p = props();
     if (!e || !e.parameter || e.parameter.s !== p.getProperty('WEBHOOK_SECRET')) return ok;
     const update = JSON.parse(e.postData.contents);
-
-    const lock = LockService.getScriptLock();
-    if (!lock.tryLock(20000)) return ok;
-    try {
-      // Telegram reenvia quando o Apps Script responde com redirect: ignora update repetido.
-      const ultimo = Number(p.getProperty('ULTIMO_UPDATE') || 0);
-      if (update.update_id <= ultimo) return ok;
-      p.setProperty('ULTIMO_UPDATE', String(update.update_id));
-    } finally {
-      lock.releaseLock();
-    }
-
     const msg = update.message;
     if (!msg) return ok;
     const chatId = String(msg.chat.id);
     const dono = p.getProperty('CHAT_ID');
-    if (!dono) {
-      // Só antes de configurar: ajuda a descobrir o chat_id.
-      enviar(chatId, `Seu chat_id é ${chatId}. Coloque em CHAT_ID nas Script Properties.`);
-      return ok;
-    }
-    if (chatId !== dono) return ok;
+    if (dono && chatId !== dono) return ok;
 
+    // Um update por vez: leitura do km anterior, gravação, pendente e /desfazer não se cruzam.
+    // ponytail: lock global; se demorar >25s o update se perde e o usuário reenvia.
+    const lock = LockService.getScriptLock();
+    if (!lock.tryLock(25000)) return ok;
     try {
-      enviar(chatId, processarMensagem(msg, new Date()));
-    } catch (err) {
-      enviar(chatId, 'Deu ruim aqui, chefe: ' + err.message);
+      // Telegram reenvia quando o Apps Script responde com redirect. Os ids nem sempre crescem
+      // (após uma semana parado o próximo é aleatório), então guarda os últimos vistos.
+      const vistos = JSON.parse(p.getProperty('UPDATES_VISTOS') || '[]');
+      if (vistos.includes(update.update_id)) return ok;
+      p.setProperty('UPDATES_VISTOS', JSON.stringify(vistos.concat(update.update_id).slice(-100)));
+
+      if (!dono) {
+        // Só antes de configurar: ajuda a descobrir o chat_id.
+        enviar(chatId, `Seu chat_id é ${chatId}. Coloque em CHAT_ID nas Script Properties.`);
+        return ok;
+      }
+      try {
+        enviar(chatId, processarMensagem(msg, new Date()));
+      } catch (err) {
+        enviar(chatId, 'Deu ruim aqui, chefe: ' + err.message + '\nManda de novo daqui a pouco.');
+      }
+    } finally {
+      lock.releaseLock();
     }
   } catch (err) {
     console.error(err);
@@ -83,16 +84,16 @@ function processarMensagem(msg, agora) {
       return registrarAbastecimento({
         data: inicioDoDia(agora), valorPago: m.valor, cashback: 0,
         litros: m.litros, km: m.km, combustivel: m.combustivel, posto: '',
-      });
+      }).texto;
     case 'km': {
       const pendente = props().getProperty('PENDENTE');
       if (!pendente) return AJUDA;
       const a = JSON.parse(pendente);
       a.data = new Date(a.data);
       a.km = m.km;
-      const resposta = registrarAbastecimento(a);
-      props().deleteProperty('PENDENTE');
-      return resposta;
+      const r = registrarAbastecimento(a);
+      if (r.ok) props().deleteProperty('PENDENTE'); // km recusado: o print continua esperando
+      return r.ok ? r.texto : r.texto + '\nManda o km certo, chefe.';
     }
     case 'despesa':
       return gravarERetornar(montarDespesa(m), null, null);
@@ -115,23 +116,27 @@ function idDaImagem(msg) {
 }
 
 function processarPrint(fileId, legenda, agora) {
+  props().deleteProperty('PENDENTE'); // print novo sempre substitui o anterior
   const a = normalizarGemini(lerPrint(fileId), agora);
   if (!a) {
     return 'Não consegui ler esse print, chefe. Manda digitado: valor litros km tipo (ex.: 72,40 11,20 48250 a)';
   }
   a.km = parseKm(legenda);
-  if (!a.km) {
+  if (a.km) {
+    const r = registrarAbastecimento(a);
+    if (r.ok) return r.texto;
     props().setProperty('PENDENTE', JSON.stringify(a));
-    return `Li aqui: ${a.litros.toFixed(2).replace('.', ',')} L por R$ ${(a.valorPago - a.cashback).toFixed(2).replace('.', ',')}. Qual o km, chefe?`;
+    return r.texto + '\nManda o km certo, chefe.';
   }
-  props().deleteProperty('PENDENTE');
-  return registrarAbastecimento(a);
+  props().setProperty('PENDENTE', JSON.stringify(a));
+  return `Li aqui: ${a.litros.toFixed(2).replace('.', ',')} L por R$ ${(a.valorPago - a.cashback).toFixed(2).replace('.', ',')}. Qual o km, chefe?`;
 }
 
+/** Valida, grava e devolve {ok, texto}. */
 function registrarAbastecimento(a) {
   const r = montarAbastecimento(a, kmAnterior());
-  if (r.erro) return r.erro;
-  return gravarERetornar(r.linha, r.kmRodado, r.aviso);
+  if (r.erro) return { ok: false, texto: r.erro };
+  return { ok: true, texto: gravarERetornar(r.linha, r.kmRodado, r.aviso) };
 }
 
 function gravarERetornar(linha, kmRodado, aviso) {
@@ -150,7 +155,8 @@ function telegram(metodo, payload) {
 }
 
 function enviar(chatId, texto) {
-  telegram('sendMessage', { chat_id: chatId, text: texto });
+  const r = telegram('sendMessage', { chat_id: chatId, text: texto });
+  if (!r.ok) console.error('sendMessage', JSON.stringify(r)); // ponytail: sem retry; o lançamento já está na planilha
 }
 
 /** Baixa a imagem do Telegram e pede ao Gemini os dados do comprovante. null se falhar. */
@@ -190,18 +196,31 @@ function lerPrint(fileId) {
 function configurarWebhook() {
   const p = props();
   const url = p.getProperty('WEBAPP_URL') + '?s=' + encodeURIComponent(p.getProperty('WEBHOOK_SECRET'));
-  console.log(JSON.stringify(telegram('setWebhook', { url, drop_pending_updates: true, allowed_updates: ['message'] })));
+  console.log(JSON.stringify(telegram('setWebhook', { url, drop_pending_updates: true, allowed_updates: ['message'], max_connections: 1 })));
 }
 
 // ───────────────────────── Planilha ─────────────────────────
 
+/** Planilha pelo ID salvo em configurarPlanilha: no web app não há planilha "ativa". */
+function planilha() {
+  return SpreadsheetApp.openById(props().getProperty('SHEET_ID'));
+}
+
 function aba() {
-  return SpreadsheetApp.getActive().getSheetByName(ABA);
+  return planilha().getSheetByName(ABA);
+}
+
+/** 2026 até o ano que vem (mínimo 2030). Rodar configurarPlanilha() de novo estende o Resumo. */
+function anosDoResumo() {
+  const ate = Math.max(2030, new Date().getFullYear() + 1);
+  return Array.from({ length: ate - 2026 + 1 }, (_, i) => 2026 + i);
 }
 
 /** Rodar uma vez no editor: cria as abas, cabeçalho, formatos e fórmulas do Resumo. */
 function configurarPlanilha() {
   const ss = SpreadsheetApp.getActive();
+  props().setProperty('SHEET_ID', ss.getId());
+  ss.setSpreadsheetTimeZone('America/Sao_Paulo');
   let sh = ss.getSheetByName(ABA);
   if (!sh) {
     sh = ss.getSheets().length === 1 && ss.getSheets()[0].getLastRow() === 0
@@ -226,19 +245,21 @@ function configurarPlanilha() {
     ['Manutenção', c => `SUMIFS(${L}C:C,${noAno(c)},${L}B:B,"Manutenção")`],
     ['Imposto', c => `SUMIFS(${L}C:C,${noAno(c)},${L}B:B,"Imposto")`],
     ['Seguro', c => `SUMIFS(${L}C:C,${noAno(c)},${L}B:B,"Seguro")`],
-    ['Km rodado', c => `IFERROR(MAXIFS(${L}E:E,${noAno(c)},${L}B:B,"Combustível")-MINIFS(${L}E:E,${noAno(c)},${L}B:B,"Combustível"),"")`],
+    // Km/L × Litros = km do intervalo; mesma população do Km/L médio (só linhas com Km/L)
+    ['Km rodado', c => `ROUND(SUMPRODUCT(${anoArr(c)}*${L}H2:H*${L}D2:D),0)`],
     ['Litros', c => `SUMIFS(${L}D:D,${noAno(c)})`],
-    // Km/L × Litros = km do intervalo; só linhas com Km/L (exclui o 1º abastecimento)
     ['Km/L médio', c => `IFERROR(SUMPRODUCT(${anoArr(c)}*${L}H2:H*${L}D2:D)/SUMPRODUCT(${anoArr(c)}*${L}D2:D),"")`],
-    ['R$/L médio', c => `IFERROR(SUMIFS(${L}C:C,${noAno(c)},${L}B:B,"Combustível")/SUMIFS(${L}D:D,${noAno(c)}),"")`],
+    // R$/L só com linhas que têm litros (registros antigos podem ter só o valor)
+    ['R$/L médio', c => `IFERROR(SUMIFS(${L}C:C,${noAno(c)},${L}D:D,">0")/SUMIFS(${L}D:D,${noAno(c)}),"")`],
     ['Km/L Comum', c => `IFERROR(SUMPRODUCT(${anoArr(c)}*(${L}F2:F="C")*${L}H2:H*${L}D2:D)/SUMPRODUCT(${anoArr(c)}*(${L}F2:F="C")*${L}D2:D),"")`],
     ['Km/L Aditivada', c => `IFERROR(SUMPRODUCT(${anoArr(c)}*(${L}F2:F="A")*${L}H2:H*${L}D2:D)/SUMPRODUCT(${anoArr(c)}*(${L}F2:F="A")*${L}D2:D),"")`],
-    ['R$/L Comum', c => `IFERROR(SUMIFS(${L}C:C,${noAno(c)},${L}F:F,"C")/SUMIFS(${L}D:D,${noAno(c)},${L}F:F,"C"),"")`],
-    ['R$/L Aditivada', c => `IFERROR(SUMIFS(${L}C:C,${noAno(c)},${L}F:F,"A")/SUMIFS(${L}D:D,${noAno(c)},${L}F:F,"A"),"")`],
+    ['R$/L Comum', c => `IFERROR(SUMIFS(${L}C:C,${noAno(c)},${L}F:F,"C",${L}D:D,">0")/SUMIFS(${L}D:D,${noAno(c)},${L}F:F,"C"),"")`],
+    ['R$/L Aditivada', c => `IFERROR(SUMIFS(${L}C:C,${noAno(c)},${L}F:F,"A",${L}D:D,">0")/SUMIFS(${L}D:D,${noAno(c)},${L}F:F,"A"),"")`],
     ['Cashback', c => `SUMIFS(${L}I:I,${noAno(c)})`],
   ];
-  const cols = ANOS.map((_, i) => String.fromCharCode(66 + i)); // B..F
-  rs.getRange(1, 1, 1, ANOS.length + 1).setValues([[''].concat(ANOS)]).setFontWeight('bold');
+  const anos = anosDoResumo();
+  const cols = anos.map((_, i) => String.fromCharCode(66 + i)); // B, C, ... (até 25 anos)
+  rs.getRange(1, 1, 1, anos.length + 1).setValues([[''].concat(anos)]).setFontWeight('bold');
   linhas.forEach(([rotulo, f], i) => {
     rs.getRange(i + 2, 1).setValue(rotulo).setFontWeight('bold');
     rs.getRange(i + 2, 2, 1, cols.length).setFormulas([cols.map(c => '=' + f(c))]);
@@ -250,13 +271,13 @@ function configurarPlanilha() {
   rs.setFrozenColumns(1);
 }
 
-/** Maior km entre os abastecimentos; null se não houver nenhum. */
+/** Km do último abastecimento; null se não houver ou se ele não tiver km (aí não dá pra calcular Km/L). */
 function kmAnterior() {
   const sh = aba();
   if (sh.getLastRow() < 2) return null;
   const v = sh.getRange(2, 2, sh.getLastRow() - 1, 4).getValues(); // B..E
-  const kms = v.filter(r => r[0] === 'Combustível' && typeof r[3] === 'number').map(r => r[3]);
-  return kms.length ? Math.max.apply(null, kms) : null;
+  const ultimo = v.filter(r => r[0] === 'Combustível').pop();
+  return ultimo && typeof ultimo[3] === 'number' ? ultimo[3] : null;
 }
 
 function gravarLinha(linha) {
@@ -275,10 +296,10 @@ function desfazer() {
 
 function resumoTexto(agora) {
   SpreadsheetApp.flush();
-  const rs = SpreadsheetApp.getActive().getSheetByName(ABA_RESUMO);
-  const col = ANOS.indexOf(agora.getFullYear());
-  if (col < 0) return 'Ano fora do Resumo, chefe. Adiciona a coluna na aba Resumo.';
-  const v = rs.getRange(2, 1, 14, ANOS.length + 1).getValues();
+  const rs = planilha().getSheetByName(ABA_RESUMO);
+  const v = rs.getDataRange().getValues();
+  const col = v[0].indexOf(agora.getFullYear()) - 1;
+  if (col < 0) return 'Ano fora do Resumo, chefe. Roda configurarPlanilha() no editor pra estender.';
   const val = rotulo => v.find(r => r[0] === rotulo)[col + 1];
   const rs$ = n => typeof n === 'number' ? 'R$ ' + n.toFixed(2).replace('.', ',') : '—';
   const num = n => typeof n === 'number' ? n.toFixed(2).replace('.', ',') : '—';

@@ -10,7 +10,9 @@ function Js($v) {
     if ($null -eq $v) { return "''" }
     if ($v -is [datetime]) { return "new Date($($v.Year),$($v.Month - 1),$($v.Day))" }
     if ($v -is [double] -or $v -is [int]) { return ([double]$v).ToString($inv) }
-    return "'" + ($v -replace "\\", "\\\\" -replace "'", "\'") + "'"
+    $t = [string]$v
+    if ($t -match '^[=+\-@]') { $t = "'" + $t }  # texto que o Sheets leria como fórmula
+    return ConvertTo-Json $t -Compress  # string JS válida: aspas, barras e quebras de linha escapadas
 }
 
 $xl = New-Object -ComObject Excel.Application
@@ -18,10 +20,11 @@ $xl.Visible = $false
 try {
     $wb = $xl.Workbooks.Open((Resolve-Path $Caminho).Path, 0, $true)
     $sh = $wb.Sheets.Item(1)
-    $ultima = $sh.UsedRange.Rows.Count
+    $ultima = $sh.UsedRange.Row + $sh.UsedRange.Rows.Count - 1
+    $ajuste1904 = if ($wb.Date1904) { 1462 } else { 0 }
     $cel = { param($r, $c) $sh.Cells.Item($r, $c).Value2 }
     $data = { param($v)
-        if ($v -is [double]) { return [datetime]::FromOADate($v).Date }
+        if ($v -is [double]) { return [datetime]::FromOADate($v + $ajuste1904).Date }
         $p = [datetime]::MinValue  # datas digitadas como texto
         if ([datetime]::TryParseExact([string]$v, [string[]]@('d/M/yyyy', 'dd/MM/yyyy'), $inv, [Globalization.DateTimeStyles]::None, [ref]$p)) { return $p }
         $null }

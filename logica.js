@@ -13,10 +13,16 @@ function parseNumero(s) {
   return /^-?\d+(\.\d+)?$/.test(t) ? Number(t) : null;
 }
 
-/** "48.250" | "48250 km" → 48250; null se não tem dígito. */
+/** "48250" | "48.250" | "48250 km" → 48250; null para qualquer outra coisa (fração, sinal, texto). */
 function parseKm(s) {
-  const d = String(s == null ? '' : s).replace(/\D/g, '');
-  return d ? Number(d) : null;
+  const m = /^\s*(\d{1,3}(?:\.\d{3})+|\d+)\s*(?:km)?\s*$/i.exec(String(s == null ? '' : s));
+  return m ? Number(m[1].replace(/\./g, '')) : null;
+}
+
+/** Texto que o Sheets interpretaria como fórmula vira texto literal. */
+function textoSeguro(s) {
+  const t = String(s == null ? '' : s);
+  return /^[=+\-@]/.test(t) ? "'" + t : t;
 }
 
 /** "dd/mm" (ano de hoje) ou "dd/mm/yyyy" → Date; null se inválida. */
@@ -49,12 +55,16 @@ function parseMensagem(texto, hoje) {
     if (valor === null || valor <= 0) return invalido;
     let resto = partes.slice(2);
     let data = inicioDoDia(hoje);
-    const dataNoFim = resto.length ? parseData(resto[resto.length - 1], hoje) : null;
-    if (dataNoFim) { data = dataNoFim; resto = resto.slice(0, -1); }
-    return { tipo: 'despesa', categoria, valor, descricao: resto.join(' '), data };
+    const ultimo = resto[resto.length - 1] || '';
+    if (/^\d{1,2}\/\d{1,2}(\/\d{4})?$/.test(ultimo)) { // parece data: tem que ser válida
+      data = parseData(ultimo, hoje);
+      if (!data) return invalido;
+      resto = resto.slice(0, -1);
+    }
+    return { tipo: 'despesa', categoria, valor, descricao: textoSeguro(resto.join(' ')), data };
   }
 
-  const ab = /^(\S+)\s+(\S+)\s+(\S+)\s+([ac])$/i.exec(t);
+  const ab = /^(\S+)\s+(\S+)\s+(\S+(?:\s+km)?)\s+([ac])$/i.exec(t);
   if (ab) {
     const valor = parseNumero(ab[1]), litros = parseNumero(ab[2]), km = parseKm(ab[3]);
     if (valor > 0 && litros > 0 && km) {
@@ -63,8 +73,8 @@ function parseMensagem(texto, hoje) {
     return invalido;
   }
 
-  if (/^[\d.]+(\s*km)?$/i.test(t)) return { tipo: 'km', km: parseKm(t) };
-  return invalido;
+  const km = parseKm(t);
+  return km ? { tipo: 'km', km } : invalido;
 }
 
 const KML_MIN = 5;
@@ -80,16 +90,18 @@ function normalizarGemini(obj, hoje) {
   const litros = parseNumero(obj.litros);
   const valorPago = parseNumero(obj.valorPago);
   if (!(litros > 0) || !(valorPago > 0)) return null; // ex.: "Total R$ 0,00" quando pago com créditos
+  const cashback = obj.cashback == null ? 0 : parseNumero(obj.cashback);
+  if (cashback === null || cashback < 0 || cashback >= valorPago) return null;
   const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(obj.data || ''));
-  const data = iso ? new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3])) : inicioDoDia(hoje);
+  const data = iso ? parseData(`${iso[3]}/${iso[2]}/${iso[1]}`, hoje) || inicioDoDia(hoje) : inicioDoDia(hoje);
   const tipo = String(obj.tipo || '').toLowerCase();
   return {
     data,
     litros,
     valorPago,
-    cashback: parseNumero(obj.cashback) || 0,
-    combustivel: /v-?power|aditivad/.test(tipo) ? 'A' : 'C',
-    posto: String(obj.posto || ''),
+    cashback,
+    combustivel: /v-?power|aditivad/.test(tipo) ? 'A' : 'C', // ponytail: só gasolina; etanol vira C
+    posto: textoSeguro(obj.posto),
   };
 }
 
@@ -139,7 +151,7 @@ function formatarConfirmacao(linha, kmRodado, aviso) {
 
 if (typeof module !== 'undefined') {
   module.exports = {
-    COLUNAS, parseNumero, parseKm, parseData, parseMensagem,
+    COLUNAS, parseNumero, parseKm, parseData, parseMensagem, textoSeguro,
     normalizarGemini, montarAbastecimento, montarDespesa, formatarConfirmacao,
   };
 }

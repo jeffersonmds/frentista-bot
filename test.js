@@ -99,4 +99,18 @@ assert.ok(L.formatarConfirmacao(r142.linha, 300, 'confere').includes('\n'));
 // linha migrada sem litros não quebra
 assert.ok(L.formatarConfirmacao([hoje, 'Combustível', 100, '', '', 'C', '', '', '', ''], null, null).includes('R$ 100,00'));
 
+// revisão do Codex
+assert.strictEqual(L.parseKm('48250.5'), null);
+assert.strictEqual(L.parseKm('-48250'), null);
+assert.strictEqual(L.parseKm('48250 04/11'), null);
+assert.strictEqual(L.parseKm('48.25'), null);
+assert.strictEqual(L.parseKm(' 48250 KM '), 48250);
+assert.strictEqual(L.parseMensagem('72,40 11,20 48250 km a', hoje).km, 48250);
+assert.strictEqual(L.parseMensagem('/manut 380 óleo 31/02/2026', hoje).tipo, 'invalido');
+assert.strictEqual(ymd(L.normalizarGemini({ data: '2026-02-31', litros: 10, valorPago: 70 }, hoje).data), '2026-11-5');
+assert.strictEqual(L.normalizarGemini({ litros: 10, valorPago: 70, cashback: 100 }, hoje), null);
+assert.strictEqual(L.normalizarGemini({ litros: 10, valorPago: 70, cashback: -1 }, hoje), null);
+assert.strictEqual(L.normalizarGemini({ litros: 10, valorPago: 70, posto: '=IMPORTXML("x")' }, hoje).posto, "'=IMPORTXML(\"x\")");
+assert.strictEqual(L.parseMensagem('/manut 50 =1+1', hoje).descricao, "'=1+1");
+
 console.log('ok');

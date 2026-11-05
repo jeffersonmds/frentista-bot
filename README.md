@@ -68,7 +68,7 @@ Números aceitam vírgula ou ponto. O km aceita `48250`, `48.250` ou `48250 km`.
 | 04/11/2026 | Combustível | 70,00 | 10,50 | 48250 | A | 6,67 | 12,57 | | Posto Exemplo |
 | 05/11/2026 | Manutenção | 380,00 | | | | | | | troca de óleo |
 
-**Resumo**: só fórmulas, uma coluna por ano (2026–2030): gasto total e por categoria, km rodado, litros, km/L médio, R$/L médio, comum vs. aditivada e cashback acumulado.
+**Resumo**: só fórmulas, uma coluna por ano (de 2026 até o ano que vem, mínimo 2030; rodar `configurarPlanilha` de novo estende): gasto total e por categoria, km rodado, litros, km/L médio, R$/L médio, comum vs. aditivada e cashback acumulado.
 
 O km/L médio é ponderado (km total ÷ litros total), não a média simples das linhas, que distorce quando aparece um abastecimento esquisito.
 
@@ -92,10 +92,11 @@ cd frentista-bot
 npm i -g @google/clasp
 clasp login
 clasp create --type sheets --title "Despesas Carro" --rootDir .
+git checkout -- . && git clean -fd   # desfaz os arquivos iniciais que o clasp baixou
 clasp push
 ```
 
-O `clasp create` cria a planilha no seu Drive com o script vinculado e grava o `.clasp.json` (que está no `.gitignore`).
+O `clasp create` cria a planilha no seu Drive com o script vinculado e grava o `.clasp.json` (que está no `.gitignore`). Ele também baixa um `appsscript.json` e um arquivo de código padrão por cima dos do repo. A segunda linha restaura os originais e remove o que sobrou, mas mantém o `.clasp.json`, que é ignorado pelo git.
 
 > Se o `clasp push` reclamar da API, ative a **Google Apps Script API** em [script.google.com/home/usersettings](https://script.google.com/home/usersettings).
 
@@ -115,7 +116,7 @@ Nenhum segredo fica no código nem no git.
 
 ### 5. Monte a planilha
 
-No editor, escolha a função `configurarPlanilha` e clique em **Executar**. Na primeira vez o Google pede autorização: aceite, porque é o seu próprio script. Isso cria as abas `Lançamentos` e `Resumo`.
+No editor, escolha a função `configurarPlanilha` e clique em **Executar**. Na primeira vez o Google pede autorização: aceite, porque é o seu próprio script. Isso cria as abas `Lançamentos` e `Resumo`, ajusta o fuso da planilha para São Paulo e salva o ID dela em `SHEET_ID`. O web app não tem planilha "ativa", então usa esse ID.
 
 ### 6. Publique e ligue o webhook
 
