@@ -258,6 +258,10 @@ function configurarPlanilha() {
     ['R$/L Aditivada', c => `IFERROR(SUMIFS(${L}C:C,${noAno(c)},${L}F:F,"A",${L}D:D,">0")/SUMIFS(${L}D:D,${noAno(c)},${L}F:F,"A"),"")`],
     ['Cashback', c => `SUMIFS(${L}I:I,${noAno(c)})`],
   ];
+  // As fórmulas usam vírgula; em locale pt_BR o Sheets esperaria ";" e dá erro de análise.
+  // Grava em en_US e volta: o Sheets converte as fórmulas para o locale original.
+  const locale = ss.getSpreadsheetLocale();
+  ss.setSpreadsheetLocale('en_US');
   const anos = anosDoResumo();
   const cols = anos.map((_, i) => String.fromCharCode(66 + i)); // B, C, ... (até 25 anos)
   rs.getRange(1, 1, 1, anos.length + 1).setValues([[''].concat(anos)]).setFontWeight('bold');
@@ -270,6 +274,8 @@ function configurarPlanilha() {
   rs.getRange(7, 2, 1, cols.length).setNumberFormat('#,##0');
   rs.setFrozenRows(1);
   rs.setFrozenColumns(1);
+  SpreadsheetApp.flush();
+  ss.setSpreadsheetLocale(locale);
 }
 
 /** Km do último abastecimento; null se não houver ou se ele não tiver km (aí não dá pra calcular Km/L). */
