@@ -67,6 +67,79 @@ function parseMensagem(texto, hoje) {
   return invalido;
 }
 
+const KML_MIN = 5;
+const KML_MAX = 25;
+
+function arred2(n) {
+  return Math.round(n * 100) / 100;
+}
+
+/** Limpa o JSON devolvido pelo Gemini; null se não dá pra confiar nele. */
+function normalizarGemini(obj, hoje) {
+  if (!obj || typeof obj !== 'object') return null;
+  const litros = parseNumero(obj.litros);
+  const valorPago = parseNumero(obj.valorPago);
+  if (!(litros > 0) || !(valorPago > 0)) return null; // ex.: "Total R$ 0,00" quando pago com créditos
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(obj.data || ''));
+  const data = iso ? new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3])) : inicioDoDia(hoje);
+  const tipo = String(obj.tipo || '').toLowerCase();
+  return {
+    data,
+    litros,
+    valorPago,
+    cashback: parseNumero(obj.cashback) || 0,
+    combustivel: /v-?power|aditivad/.test(tipo) ? 'A' : 'C',
+    posto: String(obj.posto || ''),
+  };
+}
+
+/** Monta a linha de abastecimento (ordem de COLUNAS) ou devolve {erro}. */
+function montarAbastecimento(a, kmAnterior) {
+  if (kmAnterior !== null && a.km <= kmAnterior) {
+    return { erro: `Opa, chefe: o km ${a.km} é menor ou igual ao último (${kmAnterior}). O hodômetro andou pra trás?` };
+  }
+  const valor = arred2(a.valorPago - (a.cashback || 0));
+  const kmRodado = kmAnterior === null ? null : a.km - kmAnterior;
+  const kmPorLitro = kmRodado === null ? null : arred2(kmRodado / a.litros);
+  const aviso = kmPorLitro !== null && (kmPorLitro < KML_MIN || kmPorLitro > KML_MAX)
+    ? `⚠️ ${fmtNum(kmPorLitro)} km/L tá estranho. Confere o km e os litros (/desfazer se precisar).`
+    : null;
+  const linha = [a.data, 'Combustível', valor, a.litros, a.km, a.combustivel,
+    arred2(valor / a.litros), kmPorLitro === null ? '' : kmPorLitro, a.cashback || '', a.posto || ''];
+  return { linha, kmRodado, kmPorLitro, aviso };
+}
+
+/** Linha de despesa sem combustível (ordem de COLUNAS). */
+function montarDespesa(d) {
+  return [d.data, d.categoria, d.valor, '', '', '', '', '', '', d.descricao || ''];
+}
+
+function fmtNum(n) {
+  return n.toFixed(2).replace('.', ',');
+}
+
+function fmtData(d) {
+  return String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0');
+}
+
+/** Mensagem de confirmação no tom de frentista. */
+function formatarConfirmacao(linha, kmRodado, aviso) {
+  const [data, categoria, valor, litros, , tipo, precoLitro, kmL, , descricao] = linha;
+  let partes;
+  if (categoria === 'Combustível') {
+    partes = ['⛽ Anotado, chefe! ' + fmtData(data), tipo === 'A' ? 'Aditivada' : 'Comum',
+      fmtNum(litros) + ' L', `R$ ${fmtNum(valor)} (R$ ${fmtNum(precoLitro)}/L)`];
+    if (kmRodado !== null) partes.push(`${kmRodado} km → ${fmtNum(kmL)} km/L`);
+  } else {
+    partes = ['🧾 Anotado, chefe! ' + fmtData(data), categoria, 'R$ ' + fmtNum(valor)];
+    if (descricao) partes.push(descricao);
+  }
+  return partes.join(' · ') + (aviso ? '\n' + aviso : '');
+}
+
 if (typeof module !== 'undefined') {
-  module.exports = { COLUNAS, parseNumero, parseKm, parseData, parseMensagem };
+  module.exports = {
+    COLUNAS, parseNumero, parseKm, parseData, parseMensagem,
+    normalizarGemini, montarAbastecimento, montarDespesa, formatarConfirmacao,
+  };
 }
